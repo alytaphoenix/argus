@@ -133,7 +133,7 @@ func (c *WazuhClient) RecentAlerts(ctx context.Context) ([]WazuhAlert, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, nil // non-fatal — alerts endpoint varies by version
+		return nil, err
 	}
 	return resp.Data.AffectedItems, nil
 }

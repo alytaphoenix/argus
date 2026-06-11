@@ -322,6 +322,9 @@ func (m PXEModel) saveGroupCmd() tea.Cmd {
 func (m PXEModel) deleteGroupCmd(id string) tea.Cmd {
 	database := m.database
 	return func() tea.Msg {
+		if database == nil {
+			return pxeGroupSavedMsg{err: fmt.Errorf("no database")}
+		}
 		return pxeGroupSavedMsg{err: database.DeletePXEGroup(id)}
 	}
 }

@@ -142,8 +142,8 @@ func checkHTTP(ctx context.Context, sc ServiceCheck, addr string, useTLS bool) H
 		return res
 	}
 	resp.Body.Close()
-	res.Up = true
 	res.StatusCode = resp.StatusCode
+	res.Up = resp.StatusCode < 400
 	res.CertInfo = certInfo
 	return res
 }

@@ -579,7 +579,7 @@ func (m PlexModel) viewServices(height int) string {
 
 		if svc.Enabled {
 			if !svc.Checked {
-				dot = styleDim.Render(m.spinner.View()[:2])
+				dot = styleDim.Render(string([]rune(m.spinner.View())[:1]))
 				statusStr = styleDim.Render("checking…")
 			} else if svc.Online {
 				dot = lipgloss.NewStyle().Foreground(colorGreen).Render("●")

@@ -546,10 +546,20 @@ func (d *DB) GetSetting(key, defaultVal string) string {
 
 // SetSetting persists a setting value.
 func (d *DB) SetSetting(key, value string) error {
-	_, err := d.sql.Exec(`
+	res, err := d.sql.Exec(`
 UPDATE app_settings SET value=?, updated_at=? WHERE key=?`,
 		value, time.Now(), key)
-	return err
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("setting %q not found", key)
+	}
+	return nil
 }
 
 // AllSettings returns all settings ordered by key.

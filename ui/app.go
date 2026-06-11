@@ -97,7 +97,7 @@ func NewApp(client *api.Client, saltClient *api.SaltClient, nomadClient *api.Nom
 	csClient *api.CrowdSecClient, wazuhClient *api.WazuhClient,
 	trueNASClient *api.TrueNASClient, plexClient *api.PlexClient,
 	sshUser, sshPassword string, defaults config.DefaultsConfig, cfg config.Config, database *db.DB) App {
-	return App{
+	a := App{
 		client:         client,
 		saltClient:     saltClient,
 		nomadClient:    nomadClient,
@@ -118,6 +118,8 @@ func NewApp(client *api.Client, saltClient *api.SaltClient, nomadClient *api.Nom
 		nodes:         NewNodesModel(client, saltClient != nil, nomadClient != nil, database),
 		claudeOverlay: NewClaudeOverlay(claudeClient),
 	}
+	a.loadAppSettings()
+	return a
 }
 
 // loadAppSettings loads current settings from DB into the App. Called at init and after settings saved.
@@ -128,7 +130,6 @@ func (a *App) loadAppSettings() {
 }
 
 func (a App) Init() tea.Cmd {
-	a.loadAppSettings()
 	return tea.Batch(a.nodes.Init(), a.checkMediaStatusCmd())
 }
 

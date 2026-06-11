@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -162,11 +163,8 @@ func parseCertPEM(pemBytes []byte) (*CertInfo, error) {
 
 // certToInfo converts an x509.Certificate to a CertInfo.
 func certToInfo(cert *x509.Certificate) *CertInfo {
-	// SHA-256 fingerprint
-	fp := fmt.Sprintf("%x", cert.Raw)
-	if len(fp) > 16 {
-		fp = fp[:16] + "…"
-	}
+	sum := sha256.Sum256(cert.Raw)
+	fp := fmt.Sprintf("%x", sum[:])
 	return &CertInfo{
 		CommonName: cert.Subject.CommonName,
 		DNSNames:   cert.DNSNames,

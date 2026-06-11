@@ -140,8 +140,18 @@ func (c *PlexClient) Ping(ctx context.Context) error {
 
 // AddLibrary adds a new library section to Plex via the API.
 func (c *PlexClient) AddLibrary(ctx context.Context, name, libType, path string) error {
-	url := fmt.Sprintf("%s/library/sections?name=%s&type=%s&agent=tv.plex.agents.movie&scanner=Plex%%20Movie&language=en&importFromiTunes=&enableAutoPhotoTags=&location=%s&X-Plex-Token=%s",
-		c.base, name, libType, path, c.token)
+	agent := "tv.plex.agents.movie"
+	scanner := "Plex%20Movie"
+	switch libType {
+	case "show":
+		agent = "tv.plex.agents.series"
+		scanner = "Plex%20TV%20Series"
+	case "artist":
+		agent = "tv.plex.agents.music"
+		scanner = "Plex%20Music"
+	}
+	url := fmt.Sprintf("%s/library/sections?name=%s&type=%s&agent=%s&scanner=%s&language=en&importFromiTunes=&enableAutoPhotoTags=&location=%s&X-Plex-Token=%s",
+		c.base, name, libType, agent, scanner, path, c.token)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		return err

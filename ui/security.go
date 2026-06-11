@@ -248,11 +248,10 @@ func (m SecurityModel) loadScanHistory() tea.Cmd {
 	database := m.database
 	return func() tea.Msg {
 		if database == nil {
-			return nil
+			return secScanHistoryMsg{}
 		}
-		// silently load recent scan results into memory on init; used in Scan tab
-		_, _ = database.RecentScanResults(500)
-		return nil
+		results, err := database.RecentScanResults(500)
+		return secScanHistoryMsg{results: results, err: err}
 	}
 }
 
@@ -450,6 +449,12 @@ func (m SecurityModel) Update(msg tea.Msg) (SecurityModel, tea.Cmd) {
 	case secHistoryLoadedMsg:
 		if msg.err == nil {
 			m.history = msg.events
+		}
+		return m, nil
+
+	case secScanHistoryMsg:
+		if msg.err == nil {
+			m.scanSavedResult = msg.results
 		}
 		return m, nil
 
