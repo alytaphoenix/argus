@@ -1,0 +1,178 @@
+# Copy to ~/.config/ratataskr/config.toml
+# Env vars: PROXMOX_HOST, PROXMOX_TOKEN_ID, PROXMOX_SECRET
+#           RATATASKR_SSH_USER, RATATASKR_SSH_KEY, RATATASKR_DOMAIN, RATATASKR_TIMEZONE
+#           SALT_URL, SALT_USERNAME, SALT_PASSWORD
+#           NOMAD_URL, NOMAD_TOKEN
+#           PROMETHEUS_URL, PROMETHEUS_TOKEN, RATATASKR_METRICS_LISTEN
+#           TECHNITIUM_URL, TECHNITIUM_TOKEN
+#           STEPCA_URL
+#           TRUENAS_URL, TRUENAS_API_KEY
+#
+# Secrets should be stored in the macOS Keychain via the Keys screen (tab: Keys).
+# Config file values act as fallback only; keychain entries always take priority.
+
+# Proxmox — required
+host     = "https://pve.yourdomain.com:8006"
+token_id = "user@pam!ratataskr"   # Datacenter > Permissions > API Tokens
+secret   = ""                    # leave empty — store in Keychain via Keys screen
+insecure = true                  # skip TLS verify for self-signed certs
+
+# Global defaults — applied across all integrations
+# These propagate to sub-sections if those fields are not already set.
+# Env vars: RATATASKR_SSH_USER, RATATASKR_SSH_KEY, RATATASKR_DOMAIN, RATATASKR_TIMEZONE
+[globals]
+ssh_user    = "alyta"        # default SSH username for all node connections
+ssh_key     = ""             # path to SSH private key (leave empty to use ssh-agent)
+domain      = ""             # homelab domain suffix, e.g. "homelab.local"
+timezone    = "UTC"          # IANA timezone for log display (e.g. "America/New_York")
+admin_email = ""             # operator email for cert SANs / notifications
+
+# Salt — optional; omit to disable the minions screen (m)
+[salt]
+url      = "https://salt.yourdomain.com:8000"
+username = "saltapi"
+password = "yourpassword"
+eauth    = "pam"    # pam (default), ldap, file
+insecure = true
+
+# Nomad — optional; omit to disable the jobs screen (n)
+[nomad]
+url   = "http://nomad.yourdomain.com:4646"
+token = ""  # ACL token; leave empty if ACLs are disabled
+
+# Defaults applied when provisioning new VMs (c key on guest list)
+# ssh_user inherits from [globals] if left empty.
+# SSH passwords are stored in the macOS Keychain via the Keys screen.
+[defaults]
+template_id   = 9000
+cpu_cores     = 2
+memory_mb     = 2048
+disk_gb       = 20
+storage       = "local-lvm"
+bridge        = "vmbr0"
+ostype        = "l26"
+ssh_user      = ""          # inherits globals.ssh_user ("alyta") — override here if needed
+ci_user       = "alyta"
+ci_ssh_key    = ""          # paste your public key here
+ci_ipconfig   = "ip=dhcp"
+nameserver    = "1.1.1.1"
+searchdomain  = ""          # inherits globals.domain if set
+
+# Matchbox PXE server — optional; enables the PXE screen for bare-metal provisioning
+# Run Matchbox as a Nomad job or Docker container: https://matchbox.psdn.io
+# Env vars: MATCHBOX_URL, MATCHBOX_TOKEN
+[matchbox]
+url   = "http://matchbox.yourdomain.com:8080"
+token = ""  # optional Bearer token if Matchbox is behind an auth proxy
+
+# CrowdSec — optional; enables the Security → CrowdSec tab
+# Get LAPI key: cscli bouncers add ratataskr
+# Env vars: CROWDSEC_URL, CROWDSEC_API_KEY
+[crowdsec]
+url     = "http://localhost:8080"  # CrowdSec Local API address
+api_key = ""                       # from: cscli bouncers add ratataskr
+
+# TrueNAS — optional; enables the Services → TrueNAS tab
+# Monitors ZFS pools, datasets, alerts, and running services.
+# API key: TrueNAS UI → System → API Keys → Add (grant all permissions)
+# Env vars: TRUENAS_URL, TRUENAS_API_KEY
+[truenas]
+url      = "https://truenas.yourdomain.com"
+api_key  = ""      # store in Keychain via Keys screen
+insecure = true    # skip TLS verify for self-signed certs
+
+# Wazuh — optional; enables the Security → Wazuh tab
+# Env vars: WAZUH_URL, WAZUH_USERNAME, WAZUH_PASSWORD
+[wazuh]
+url      = "https://wazuh-manager.yourdomain.com:55000"
+username = "wazuh-wui"
+password = ""
+
+# Claude AI — optional; enables AI-powered VM resize explanations (? key in right-sizing screen)
+# Env var: ANTHROPIC_API_KEY (preferred; avoids storing key in config file)
+[claude]
+api_key = ""  # or set ANTHROPIC_API_KEY env var
+model   = ""  # leave empty for default (claude-sonnet-4-6)
+
+# Technitium DNS — optional; enables the DNS tab in the Services screen
+# Get your API token: Technitium admin → Settings → API Keys
+# Env vars: TECHNITIUM_URL, TECHNITIUM_TOKEN
+[technitium]
+url   = "http://dns.yourdomain.com:5380"
+token = ""  # API token from Technitium admin panel
+
+# Smallstep step-ca — optional; enables CA health check in Services screen
+# fingerprint: run `step ca fingerprint` on the CA host
+# Env var: STEPCA_URL
+[stepca]
+url         = "https://ca.yourdomain.com:8443"
+fingerprint = ""  # SHA-256 fingerprint of the root cert (from `step ca fingerprint`)
+
+# Prometheus / Metrics — optional
+# url    — Prometheus server to query in the Metrics screen (tab: Metrics)
+# listen — ratataskr's own /metrics server; scrape at http://host:9099/metrics
+#          leave empty to disable
+# Env vars: PROMETHEUS_URL, PROMETHEUS_TOKEN, RATATASKR_METRICS_LISTEN
+[prometheus]
+url    = "http://prometheus.yourdomain.com:9090"
+token  = ""       # Bearer token if Prometheus auth is enabled
+listen = ":9099"  # bind address for ratataskr's own Prometheus metrics endpoint
+
+# Plex Media Server — optional; enables the Plex screen (tab: Plex)
+# token: get your X-Plex-Token from https://support.plex.tv/articles/204059436
+#        or store it in the Keychain via Keys screen (key: plex_token)
+# vmid/vm_node: set to the Proxmox VMID/node where Plex runs for status badge
+[plex]
+url      = "http://192.168.1.50:32400"
+token    = ""      # X-Plex-Token; store in Keychain via Keys screen
+insecure = false
+vmid     = 0       # optional: Proxmox VMID of the Plex VM
+vm_node  = ""      # optional: Proxmox node name for the Plex VM
+
+# Servarr companion services — each optional; omit a section to skip that service.
+# api_key: Settings → General → API Key in each app's web UI
+# vmid/vm_node: set if the service runs in a Proxmox VM (for status badge)
+
+[servarr.sonarr]
+url     = "http://192.168.1.50:8989"
+api_key = ""
+insecure = false
+vmid    = 0
+vm_node = ""
+
+[servarr.radarr]
+url     = "http://192.168.1.50:7878"
+api_key = ""
+insecure = false
+vmid    = 0
+vm_node = ""
+
+[servarr.lidarr]
+url     = "http://192.168.1.50:8686"
+api_key = ""
+insecure = false
+
+[servarr.readarr]
+url     = "http://192.168.1.50:8787"
+api_key = ""
+insecure = false
+
+[servarr.prowlarr]
+url     = "http://192.168.1.50:9696"
+api_key = ""
+insecure = false
+
+[servarr.bazarr]
+url     = "http://192.168.1.50:6767"
+api_key = ""
+insecure = false
+
+[servarr.overseerr]
+url     = "http://192.168.1.50:5055"
+api_key = ""
+insecure = false
+
+[servarr.tautulli]
+url     = "http://192.168.1.50:8181"
+api_key = ""
+insecure = false

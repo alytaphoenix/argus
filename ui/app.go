@@ -1,0 +1,719 @@
+package ui
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/alytaphoenix/ratataskr/api"
+	"github.com/alytaphoenix/ratataskr/config"
+	"github.com/alytaphoenix/ratataskr/db"
+)
+
+type screenID int
+
+const (
+	screenNodes screenID = iota
+	screenGuests
+	screenDetail
+	screenSalt
+	screenSaltDetail
+	screenNomad
+	screenNomadDetail
+	screenProvision
+	screenCredentials
+	screenProfiles
+	screenMetrics
+	screenServices
+	screenResize
+	screenPXE
+	screenSecurity
+	screenSettings
+	screenMaintenance
+	screenPlex
+	screenRunbooks
+	screenAlertRoutes
+	screenLifecycle
+	screenAnsible
+)
+
+type App struct {
+	screen         screenID
+	width          int
+	height         int
+	client         *api.Client
+	saltClient     *api.SaltClient
+	nomadClient    *api.NomadClient
+	promClient     *api.PrometheusClient
+	dnsClient      *api.TechnitiumClient
+	caClient       *api.StepCAClient
+	claudeClient   *api.ClaudeClient
+	matchboxClient *api.MatchboxClient
+	csClient       *api.CrowdSecClient
+	wazuhClient    *api.WazuhClient
+	trueNASClient  *api.TrueNASClient
+	plexClient     *api.PlexClient
+	database       *db.DB
+	sshUser        string
+	sshPassword    string
+	defaults       config.DefaultsConfig
+	cfg            config.Config
+	nodes          NodesModel
+	guests         GuestsModel
+	detail         DetailModel
+	salt           SaltModel
+	saltDetail     SaltDetailModel
+	nomad          NomadModel
+	nomadDetail    NomadDetailModel
+	provision      ProvisionModel
+	credentials    CredentialsModel
+	profiles       ProfilesModel
+	metrics        MetricsModel
+	services       ServicesModel
+	resize         ResizeModel
+	pxe            PXEModel
+	security       SecurityModel
+	settings       SettingsModel
+	maintenance    MaintenanceModel
+	plex           PlexModel
+	runbooks       RunbooksModel
+	alertRoutes    AlertRoutesModel
+	lifecycle      LifecycleModel
+	ansible        AnsibleModel
+	claudeOverlay  ClaudeOverlayModel
+	appSettings    db.AppSettings
+	// lightweight badge state for nodes screen
+	mediaBadgePlex     *bool   // nil=unchecked, true=online, false=offline
+	mediaBadgeServices []api.ServarrStatus
+}
+
+func NewApp(client *api.Client, saltClient *api.SaltClient, nomadClient *api.NomadClient,
+	promClient *api.PrometheusClient, dnsClient *api.TechnitiumClient, caClient *api.StepCAClient,
+	claudeClient *api.ClaudeClient, matchboxClient *api.MatchboxClient,
+	csClient *api.CrowdSecClient, wazuhClient *api.WazuhClient,
+	trueNASClient *api.TrueNASClient, plexClient *api.PlexClient,
+	sshUser, sshPassword string, defaults config.DefaultsConfig, cfg config.Config, database *db.DB) App {
+	return App{
+		client:         client,
+		saltClient:     saltClient,
+		nomadClient:    nomadClient,
+		promClient:     promClient,
+		dnsClient:      dnsClient,
+		caClient:       caClient,
+		claudeClient:   claudeClient,
+		matchboxClient: matchboxClient,
+		csClient:       csClient,
+		wazuhClient:    wazuhClient,
+		trueNASClient:  trueNASClient,
+		plexClient:     plexClient,
+		database:       database,
+		sshUser:        sshUser,
+		sshPassword:    sshPassword,
+		defaults:       defaults,
+		cfg:            cfg,
+		nodes:         NewNodesModel(client, saltClient != nil, nomadClient != nil, database),
+		claudeOverlay: NewClaudeOverlay(claudeClient),
+	}
+}
+
+// loadAppSettings loads current settings from DB into the App. Called at init and after settings saved.
+func (a *App) loadAppSettings() {
+	if a.database != nil {
+		a.appSettings = a.database.LoadAppSettings()
+	}
+}
+
+func (a App) Init() tea.Cmd {
+	a.loadAppSettings()
+	return tea.Batch(a.nodes.Init(), a.checkMediaStatusCmd())
+}
+
+// checkMediaStatusCmd does a lightweight Plex + servarr ping for the nodes-screen badge.
+func (a App) checkMediaStatusCmd() tea.Cmd {
+	plexClient := a.plexClient
+	cfg := a.cfg
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var plexOnline bool
+		if plexClient != nil {
+			plexOnline = plexClient.Ping(ctx) == nil
+		}
+
+		cfgMap := map[string]config.ServarrAppConfig{
+			"sonarr":    cfg.Servarr.Sonarr,
+			"radarr":    cfg.Servarr.Radarr,
+			"lidarr":    cfg.Servarr.Lidarr,
+			"readarr":   cfg.Servarr.Readarr,
+			"prowlarr":  cfg.Servarr.Prowlarr,
+			"bazarr":    cfg.Servarr.Bazarr,
+			"overseerr": cfg.Servarr.Overseerr,
+			"tautulli":  cfg.Servarr.Tautulli,
+		}
+		var services []api.ServarrStatus
+		for id, appCfg := range cfgMap {
+			if appCfg.URL == "" {
+				continue
+			}
+			client := api.NewServarrClient(appCfg.URL, appCfg.APIKey, id, appCfg.Insecure)
+			s := client.FetchStatus(ctx)
+			s.AppName = id
+			services = append(services, s)
+		}
+		return mediaStatusMsg{plexOnline: plexOnline, services: services}
+	}
+}
+
+func (a App) sectionRoots() []screenID {
+	roots := []screenID{screenNodes}
+	if a.saltClient != nil {
+		roots = append(roots, screenSalt)
+	}
+	if a.nomadClient != nil {
+		roots = append(roots, screenNomad)
+	}
+	roots = append(roots, screenProfiles)
+	roots = append(roots, screenMetrics)
+	roots = append(roots, screenServices)
+	roots = append(roots, screenPXE)
+	roots = append(roots, screenSecurity)
+	roots = append(roots, screenMaintenance)
+	roots = append(roots, screenPlex)
+	roots = append(roots, screenRunbooks)
+	roots = append(roots, screenAlertRoutes)
+	roots = append(roots, screenLifecycle)
+	roots = append(roots, screenAnsible)
+	roots = append(roots, screenSettings)
+	roots = append(roots, screenCredentials)
+	return roots
+}
+
+func sectionOf(s screenID) screenID {
+	switch s {
+	case screenGuests, screenDetail, screenProvision, screenResize:
+		return screenNodes
+	case screenSaltDetail:
+		return screenSalt
+	case screenNomadDetail:
+		return screenNomad
+	default:
+		return s
+	}
+}
+
+
+func (a App) switchSection(next screenID) (App, tea.Cmd) {
+	switch next {
+	case screenSalt:
+		if a.saltClient != nil {
+			a.screen = screenSalt
+			a.salt = NewSaltModel(a.saltClient)
+			a.salt.width, a.salt.height = a.width, a.height
+			return a, a.salt.Init()
+		}
+	case screenNomad:
+		if a.nomadClient != nil {
+			a.screen = screenNomad
+			a.nomad = NewNomadModel(a.nomadClient, a.database)
+			a.nomad.width, a.nomad.height = a.width, a.height
+			return a, a.nomad.Init()
+		}
+	case screenCredentials:
+		a.screen = screenCredentials
+		a.credentials = NewCredentialsModel(a.database, a.cfg.Globals)
+		a.credentials.width, a.credentials.height = a.width, a.height
+		return a, a.credentials.Init()
+	case screenProfiles:
+		a.screen = screenProfiles
+		a.profiles = NewProfilesModel(a.database)
+		a.profiles.width, a.profiles.height = a.width, a.height
+		return a, a.profiles.Init()
+	case screenMetrics:
+		a.screen = screenMetrics
+		a.metrics = NewMetricsModel(a.database, a.promClient, a.cfg)
+		a.metrics.width, a.metrics.height = a.width, a.height
+		return a, a.metrics.Init()
+	case screenServices:
+		a.screen = screenServices
+		a.services = NewServicesModel(a.dnsClient, a.caClient, a.trueNASClient, a.database, a.cfg, a.appSettings)
+		a.services.width, a.services.height = a.width, a.height
+		return a, a.services.Init()
+	case screenPXE:
+		a.screen = screenPXE
+		a.pxe = NewPXEModel(a.matchboxClient, a.client, a.database)
+		a.pxe.width, a.pxe.height = a.width, a.height
+		return a, a.pxe.Init()
+	case screenSecurity:
+		a.screen = screenSecurity
+		a.security = NewSecurityModel(a.csClient, a.wazuhClient, a.client, a.database, a.appSettings)
+		a.security.width, a.security.height = a.width, a.height
+		return a, a.security.Init()
+	case screenSettings:
+		a.screen = screenSettings
+		a.settings = NewSettingsModel(a.database)
+		a.settings.width, a.settings.height = a.width, a.height
+		return a, a.settings.Init()
+	case screenMaintenance:
+		a.screen = screenMaintenance
+		a.maintenance = NewMaintenanceModel(a.client, a.saltClient, a.database)
+		a.maintenance.width, a.maintenance.height = a.width, a.height
+		return a, a.maintenance.Init()
+	case screenPlex:
+		a.screen = screenPlex
+		a.plex = NewPlexModel(a.plexClient, a.client, a.trueNASClient, a.database, a.cfg)
+		a.plex.width, a.plex.height = a.width, a.height
+		return a, a.plex.Init()
+	case screenRunbooks:
+		a.screen = screenRunbooks
+		a.runbooks = NewRunbooksModel(a.database, a.saltClient)
+		a.runbooks.width, a.runbooks.height = a.width, a.height
+		return a, a.runbooks.Init()
+	case screenAlertRoutes:
+		a.screen = screenAlertRoutes
+		a.alertRoutes = NewAlertRoutesModel(a.database)
+		a.alertRoutes.width, a.alertRoutes.height = a.width, a.height
+		return a, a.alertRoutes.Init()
+	case screenLifecycle:
+		a.screen = screenLifecycle
+		a.lifecycle = NewLifecycleModel(a.database, a.client)
+		a.lifecycle.width, a.lifecycle.height = a.width, a.height
+		return a, a.lifecycle.Init()
+	case screenAnsible:
+		a.screen = screenAnsible
+		a.ansible = NewAnsibleModel(api.NewAnsibleRunner("", ""))
+		a.ansible.width, a.ansible.height = a.width, a.height
+		return a, a.ansible.Init()
+	case screenNodes:
+		a.screen = screenNodes
+		a.nodes = NewNodesModel(a.client, a.saltClient != nil, a.nomadClient != nil, a.database)
+		a.nodes.width, a.nodes.height = a.width, a.height
+		return a, a.nodes.Init()
+	}
+	return a, nil
+}
+
+func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		a.width, a.height = msg.Width, msg.Height
+		a.nodes.width, a.nodes.height = msg.Width, msg.Height
+		a.guests.width, a.guests.height = msg.Width, msg.Height
+		a.detail.width, a.detail.height = msg.Width, msg.Height
+		a.salt.width, a.salt.height = msg.Width, msg.Height
+		a.saltDetail.width, a.saltDetail.height = msg.Width, msg.Height
+		a.nomad.width, a.nomad.height = msg.Width, msg.Height
+		a.nomadDetail.width, a.nomadDetail.height = msg.Width, msg.Height
+		a.provision.width, a.provision.height = msg.Width, msg.Height
+		a.credentials.width, a.credentials.height = msg.Width, msg.Height
+		a.profiles.width, a.profiles.height = msg.Width, msg.Height
+		a.metrics.width, a.metrics.height = msg.Width, msg.Height
+		a.services.width, a.services.height = msg.Width, msg.Height
+		a.resize.width, a.resize.height = msg.Width, msg.Height
+		a.pxe.width, a.pxe.height = msg.Width, msg.Height
+		a.security.width, a.security.height = msg.Width, msg.Height
+		a.settings.width, a.settings.height = msg.Width, msg.Height
+		a.maintenance.width, a.maintenance.height = msg.Width, msg.Height
+		a.plex.width, a.plex.height = msg.Width, msg.Height
+		a.runbooks.width, a.runbooks.height = msg.Width, msg.Height
+		a.alertRoutes.width, a.alertRoutes.height = msg.Width, msg.Height
+		a.lifecycle.width, a.lifecycle.height = msg.Width, msg.Height
+		a.ansible.width, a.ansible.height = msg.Width, msg.Height
+		a.claudeOverlay.width, a.claudeOverlay.height = msg.Width, msg.Height
+		return a, nil
+
+	case nodeSelectedMsg:
+		a.screen = screenGuests
+		a.guests = NewGuestsModel(a.client, msg.node, a.sshUser, a.sshPassword, a.database)
+		a.guests.width, a.guests.height = a.width, a.height
+		return a, a.guests.Init()
+
+	case guestSelectedMsg:
+		a.screen = screenDetail
+		a.detail = NewDetailModel(a.client, a.saltClient, msg.guest, a.sshUser, a.sshPassword)
+		a.detail.width, a.detail.height = a.width, a.height
+		return a, a.detail.Init()
+
+	case openSaltMsg:
+		return a.switchSection(screenSalt)
+
+	case minionSelectedMsg:
+		a.screen = screenSaltDetail
+		a.saltDetail = NewSaltDetailModel(a.saltClient, msg.minion, a.database)
+		a.saltDetail.width, a.saltDetail.height = a.width, a.height
+		return a, a.saltDetail.Init()
+
+	case openNomadMsg:
+		return a.switchSection(screenNomad)
+
+	case nomadJobSelectedMsg:
+		a.screen = screenNomadDetail
+		a.nomadDetail = NewNomadDetailModel(a.nomadClient, msg.job, a.database)
+		a.nomadDetail.width, a.nomadDetail.height = a.width, a.height
+		return a, a.nomadDetail.Init()
+
+	case openProvisionMsg:
+		a.screen = screenProvision
+		a.provision = NewProvisionModel(a.client, msg.node, a.defaults, a.database)
+		a.provision.width, a.provision.height = a.width, a.height
+		return a, a.provision.Init()
+
+	case openCredentialsMsg:
+		return a.switchSection(screenCredentials)
+
+	case openProfilesMsg:
+		return a.switchSection(screenProfiles)
+
+	case openMetricsMsg:
+		return a.switchSection(screenMetrics)
+
+	case openServicesMsg:
+		return a.switchSection(screenServices)
+
+	case openPXEMsg:
+		return a.switchSection(screenPXE)
+
+	case openSecurityMsg:
+		return a.switchSection(screenSecurity)
+
+	case openSettingsMsg:
+		return a.switchSection(screenSettings)
+
+	case openMaintenanceMsg:
+		return a.switchSection(screenMaintenance)
+
+	case openPlexMsg:
+		return a.switchSection(screenPlex)
+
+	case openRunbooksMsg:
+		return a.switchSection(screenRunbooks)
+
+	case openAlertRoutesMsg:
+		return a.switchSection(screenAlertRoutes)
+
+	case openLifecycleMsg:
+		return a.switchSection(screenLifecycle)
+
+	case openAnsibleMsg:
+		return a.switchSection(screenAnsible)
+
+	case claudeOverlayMsg:
+		a.claudeOverlay = a.claudeOverlay.Open(a.currentContext())
+		return a, a.claudeOverlay.Init()
+
+	case claudeResponseMsg:
+		var cmd tea.Cmd
+		a.claudeOverlay, cmd = a.claudeOverlay.Update(msg)
+		return a, cmd
+
+	case mediaStatusMsg:
+		online := msg.plexOnline
+		a.mediaBadgePlex = &online
+		a.mediaBadgeServices = msg.services
+		return a, nil
+
+	case settingsSavedMsg:
+		// Reload app settings whenever anything is saved in the Settings screen
+		a.loadAppSettings()
+
+	case openResizeMsg:
+		a.screen = screenResize
+		a.resize = NewResizeModel(a.client, a.claudeClient, msg.node, msg.guests, a.database)
+		a.resize.width, a.resize.height = a.width, a.height
+		return a, a.resize.Init()
+
+	case backMsg:
+		switch a.screen {
+		case screenGuests, screenSalt, screenNomad, screenCredentials, screenProfiles,
+			screenMetrics, screenServices, screenPXE, screenSecurity, screenSettings,
+			screenMaintenance, screenPlex, screenRunbooks, screenAlertRoutes, screenLifecycle, screenAnsible:
+			a.screen = screenNodes
+		case screenResize:
+			a.screen = screenGuests
+		case screenDetail:
+			a.screen = screenGuests
+		case screenSaltDetail:
+			a.screen = screenSalt
+		case screenNomadDetail:
+			a.screen = screenNomad
+		case screenProvision:
+			a.screen = screenGuests
+		}
+		return a, nil
+
+	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			return a, tea.Quit
+		}
+		// Global Claude overlay toggle
+		if msg.String() == "ctrl+a" && a.claudeClient != nil {
+			if a.claudeOverlay.visible {
+				a.claudeOverlay = a.claudeOverlay.Close()
+			} else {
+				a.claudeOverlay = a.claudeOverlay.Open(a.currentContext())
+				return a, a.claudeOverlay.Init()
+			}
+			return a, nil
+		}
+		// If overlay visible, send keys there
+		if a.claudeOverlay.visible {
+			var oCmd tea.Cmd
+			a.claudeOverlay, oCmd = a.claudeOverlay.Update(msg)
+			return a, oCmd
+		}
+		cur := sectionOf(a.screen)
+		if msg.String() == "tab" || msg.String() == "shift+tab" {
+			if cur == a.screen {
+				roots := a.sectionRoots()
+				idx := 0
+				for i, r := range roots {
+					if r == a.screen {
+						idx = i
+						break
+					}
+				}
+				var next int
+				if msg.String() == "tab" {
+					next = (idx + 1) % len(roots)
+				} else {
+					next = (idx - 1 + len(roots)) % len(roots)
+				}
+				if roots[next] != a.screen {
+					return a.switchSection(roots[next])
+				}
+				return a, nil
+			}
+		}
+	}
+
+	var cmd tea.Cmd
+	switch a.screen {
+	case screenNodes:
+		a.nodes, cmd = a.nodes.Update(msg)
+	case screenGuests:
+		a.guests, cmd = a.guests.Update(msg)
+	case screenDetail:
+		a.detail, cmd = a.detail.Update(msg)
+	case screenSalt:
+		a.salt, cmd = a.salt.Update(msg)
+	case screenSaltDetail:
+		a.saltDetail, cmd = a.saltDetail.Update(msg)
+	case screenNomad:
+		a.nomad, cmd = a.nomad.Update(msg)
+	case screenNomadDetail:
+		a.nomadDetail, cmd = a.nomadDetail.Update(msg)
+	case screenProvision:
+		a.provision, cmd = a.provision.Update(msg)
+	case screenCredentials:
+		a.credentials, cmd = a.credentials.Update(msg)
+	case screenProfiles:
+		a.profiles, cmd = a.profiles.Update(msg)
+	case screenMetrics:
+		a.metrics, cmd = a.metrics.Update(msg)
+	case screenServices:
+		a.services, cmd = a.services.Update(msg)
+	case screenResize:
+		a.resize, cmd = a.resize.Update(msg)
+	case screenPXE:
+		a.pxe, cmd = a.pxe.Update(msg)
+	case screenSecurity:
+		a.security, cmd = a.security.Update(msg)
+	case screenSettings:
+		a.settings, cmd = a.settings.Update(msg)
+	case screenMaintenance:
+		a.maintenance, cmd = a.maintenance.Update(msg)
+	case screenPlex:
+		a.plex, cmd = a.plex.Update(msg)
+	case screenRunbooks:
+		a.runbooks, cmd = a.runbooks.Update(msg)
+	case screenAlertRoutes:
+		a.alertRoutes, cmd = a.alertRoutes.Update(msg)
+	case screenLifecycle:
+		a.lifecycle, cmd = a.lifecycle.Update(msg)
+	case screenAnsible:
+		a.ansible, cmd = a.ansible.Update(msg)
+	}
+
+	// Claude overlay receives updates regardless of screen if visible
+	if a.claudeOverlay.visible {
+		var oCmd tea.Cmd
+		a.claudeOverlay, oCmd = a.claudeOverlay.Update(msg)
+		if oCmd != nil {
+			cmd = tea.Batch(cmd, oCmd)
+		}
+	}
+
+	return a, cmd
+}
+
+func (a App) tabBar() string {
+	type tabEntry struct {
+		label  string
+		screen screenID
+	}
+	entries := []tabEntry{{"Proxmox", screenNodes}}
+	if a.saltClient != nil {
+		entries = append(entries, tabEntry{"Salt", screenSalt})
+	}
+	if a.nomadClient != nil {
+		entries = append(entries, tabEntry{"Nomad", screenNomad})
+	}
+	entries = append(entries, tabEntry{"Profiles", screenProfiles})
+	entries = append(entries, tabEntry{"Metrics", screenMetrics})
+	entries = append(entries, tabEntry{"Services", screenServices})
+	entries = append(entries, tabEntry{"PXE", screenPXE})
+	entries = append(entries, tabEntry{"Security", screenSecurity})
+	entries = append(entries, tabEntry{"Maintenance", screenMaintenance})
+	entries = append(entries, tabEntry{"Plex", screenPlex})
+	entries = append(entries, tabEntry{"Runbooks", screenRunbooks})
+	entries = append(entries, tabEntry{"Alerts", screenAlertRoutes})
+	entries = append(entries, tabEntry{"Lifecycle", screenLifecycle})
+	entries = append(entries, tabEntry{"Ansible", screenAnsible})
+	entries = append(entries, tabEntry{"Settings", screenSettings})
+	entries = append(entries, tabEntry{"Keys", screenCredentials})
+
+	cur := sectionOf(a.screen)
+	var parts []string
+	for _, t := range entries {
+		label := " " + t.label + " "
+		if t.screen == cur {
+			parts = append(parts, styleTabActive.Render("▸"+label))
+		} else {
+			parts = append(parts, styleTabInactive.Render(" "+label))
+		}
+	}
+	bar := strings.Join(parts, styleDim.Render("│"))
+	hint := styleDim.Render(" tab/shift+tab")
+	return bar + "  " + hint + "\n" + styleDim.Render(strings.Repeat("─", max(a.width, 40))) + "\n"
+}
+
+func (a App) View() string {
+	content := ""
+	switch a.screen {
+	case screenNodes:
+		content = a.nodes.View() + a.mediaBadgeBanner()
+	case screenGuests:
+		content = a.guests.View()
+	case screenDetail:
+		content = a.detail.View()
+	case screenSalt:
+		content = a.salt.View()
+	case screenSaltDetail:
+		content = a.saltDetail.View()
+	case screenNomad:
+		content = a.nomad.View()
+	case screenNomadDetail:
+		content = a.nomadDetail.View()
+	case screenProvision:
+		content = a.provision.View()
+	case screenCredentials:
+		content = a.credentials.View()
+	case screenProfiles:
+		content = a.profiles.View()
+	case screenMetrics:
+		content = a.metrics.View()
+	case screenServices:
+		content = a.services.View()
+	case screenResize:
+		content = a.resize.View()
+	case screenPXE:
+		content = a.pxe.View()
+	case screenSecurity:
+		content = a.security.View()
+	case screenSettings:
+		content = a.settings.View()
+	case screenMaintenance:
+		content = a.maintenance.View()
+	case screenPlex:
+		content = a.plex.View()
+	case screenRunbooks:
+		content = a.runbooks.View()
+	case screenAlertRoutes:
+		content = a.alertRoutes.View()
+	case screenLifecycle:
+		content = a.lifecycle.View()
+	case screenAnsible:
+		content = a.ansible.View()
+	}
+
+	view := a.tabBar() + content
+	if a.claudeOverlay.visible {
+		view = a.claudeOverlay.renderOver(view, a.width, a.height)
+	}
+	return view
+}
+
+// mediaBadgeBanner returns a one-line service status banner for the nodes screen.
+// Shows badges for Plex and any configured servarr services.
+func (a App) mediaBadgeBanner() string {
+	// If no media services configured at all, show nothing
+	hasAny := a.plexClient != nil || len(a.mediaBadgeServices) > 0
+	if !hasAny && a.mediaBadgePlex == nil {
+		return ""
+	}
+
+	var parts []string
+
+	// Plex badge
+	if a.plexClient != nil {
+		if a.mediaBadgePlex == nil {
+			parts = append(parts, styleDim.Render("● Plex …"))
+		} else if *a.mediaBadgePlex {
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorGreen).Render("● Plex"))
+		} else {
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorRed).Render("● Plex"))
+		}
+	}
+
+	// Servarr badges
+	for _, svc := range a.mediaBadgeServices {
+		name := svc.AppName
+		if svc.Online {
+			badge := lipgloss.NewStyle().Foreground(colorGreen).Render("● " + name)
+			if len(svc.Health) > 0 {
+				badge += lipgloss.NewStyle().Foreground(colorYellow).Render(fmt.Sprintf("⚠%d", len(svc.Health)))
+			}
+			parts = append(parts, badge)
+		} else {
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorRed).Render("● " + name))
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return "\n  " + styleDim.Render("Media: ") + strings.Join(parts, styleDim.Render("  ")) + "\n"
+}
+
+// currentContext returns a short summary of the current screen state for the Claude overlay.
+func (a App) currentContext() string {
+	switch a.screen {
+	case screenNodes:
+		return fmt.Sprintf("Viewing %d Proxmox nodes", len(a.nodes.nodes))
+	case screenGuests:
+		return fmt.Sprintf("Viewing guests on node %s (%d total)", a.guests.node.Name, len(a.guests.guests))
+	case screenDetail:
+		return fmt.Sprintf("Guest detail: %s (VMID %d, status: %s)", a.detail.guest.Name, a.detail.guest.VMID, a.detail.guest.Status)
+	case screenSalt:
+		return fmt.Sprintf("Salt minions: %d total", len(a.salt.minions))
+	case screenNomad:
+		return fmt.Sprintf("Nomad jobs: %d total", len(a.nomad.jobs))
+	case screenMetrics:
+		return "Viewing cluster metrics and Prometheus data"
+	case screenServices:
+		return fmt.Sprintf("Services: %d tracked", len(a.services.services))
+	case screenSecurity:
+		return "Viewing security — CrowdSec, Wazuh, port scan, CVE"
+	case screenMaintenance:
+		return "Viewing maintenance schedules and runs"
+	case screenRunbooks:
+		return fmt.Sprintf("Runbooks: %d defined", len(a.runbooks.runbooks))
+	default:
+		return "ratataskr homelab dashboard"
+	}
+}
+

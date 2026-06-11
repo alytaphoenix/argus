@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod *)",
+      "Read(//usr/local/go/bin/**)",
+      "Read(//Users/alytaphoenix/go/bin/**)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(export PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:$PATH\")",
+      "Read(//usr/local/**)",
+      "Read(//opt/**)",
+      "Bash(brew list *)",
+      "Bash(go build *)",
+      "Bash(go get *)",
+      "Bash(go vet *)",
+      "Bash(go test *)",
+      "Bash(xargs ls -la)",
+      "Bash(brew uninstall *)",
+      "Bash(brew install *)",
+      "Bash(pip show *)",
+      "Bash(npm list *)",
+      "WebSearch",
+      "Bash(pip install *)",
+      "Bash(pip3 install *)",
+      "Bash(uv tool *)",
+      "mcp__headroom__headroom_retrieve"
+    ]
+  }
+}

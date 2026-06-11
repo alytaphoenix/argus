@@ -1,0 +1,371 @@
+package ui
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/alytaphoenix/ratataskr/api"
+	"github.com/alytaphoenix/ratataskr/config"
+	"github.com/alytaphoenix/ratataskr/db"
+)
+
+const (
+	provFieldTemplate = iota
+	provFieldName
+	provFieldVMID
+	provFieldCPU
+	provFieldMemory
+	provFieldStorage
+	provFieldCIProfile // pick a saved cloud-init profile (ctrl+L to load)
+	provFieldCIUser
+	provFieldCIPassword
+	provFieldSSHKey
+	provFieldIPConfig
+	provFieldSaltProfile // record which salt profile is intended for this VM
+	provFieldBatch       // number of VMs to provision (1 = single)
+	provFieldCount
+)
+
+type ProvisionModel struct {
+	client   *api.Client
+	node     api.Node
+	defaults config.DefaultsConfig
+	database *db.DB
+
+	inputs  []textinput.Model
+	focused int
+
+	// profile load notice
+	profileNotice string
+
+	submitting bool
+	taskID     string
+	err        error
+	width      int
+	height     int
+	spinner    spinner.Model
+}
+
+func NewProvisionModel(client *api.Client, node api.Node, defaults config.DefaultsConfig, database *db.DB) ProvisionModel {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+
+	inputs := make([]textinput.Model, provFieldCount)
+	for i := range inputs {
+		inputs[i] = textinput.New()
+		inputs[i].CharLimit = 256
+	}
+
+	inputs[provFieldTemplate].Placeholder = "template VMID (e.g. 9000)"
+	inputs[provFieldTemplate].SetValue(strconv.Itoa(defaults.TemplateID))
+
+	inputs[provFieldName].Placeholder = "new VM name"
+
+	inputs[provFieldVMID].Placeholder = "new VMID (blank = auto)"
+
+	inputs[provFieldCPU].Placeholder = "CPU cores"
+	inputs[provFieldCPU].SetValue(strconv.Itoa(defaults.CPUCores))
+
+	inputs[provFieldMemory].Placeholder = "memory (MiB)"
+	inputs[provFieldMemory].SetValue(strconv.Itoa(defaults.MemoryMB))
+
+	inputs[provFieldStorage].Placeholder = "storage pool (e.g. local-lvm)"
+	inputs[provFieldStorage].SetValue(defaults.Storage)
+
+	inputs[provFieldCIProfile].Placeholder = "cloud-init profile name (ctrl+L to load)"
+
+	inputs[provFieldCIUser].Placeholder = "cloud-init user"
+	inputs[provFieldCIUser].SetValue(defaults.CIUser)
+
+	inputs[provFieldCIPassword].Placeholder = "cloud-init password"
+	inputs[provFieldCIPassword].EchoMode = textinput.EchoPassword
+
+	inputs[provFieldSSHKey].Placeholder = "SSH public key (optional)"
+	inputs[provFieldSSHKey].SetValue(defaults.CISSHKey)
+	inputs[provFieldSSHKey].CharLimit = 2048
+
+	inputs[provFieldIPConfig].Placeholder = "ip=dhcp or ip=x.x.x.x/24,gw=..."
+	inputs[provFieldIPConfig].SetValue(defaults.CIIPConfig)
+
+	inputs[provFieldSaltProfile].Placeholder = "salt profile name (optional, for tracking)"
+
+	inputs[provFieldBatch].Placeholder = "number of VMs to provision (default 1)"
+	inputs[provFieldBatch].SetValue("1")
+
+	inputs[provFieldTemplate].Focus()
+
+	return ProvisionModel{
+		client:   client,
+		node:     node,
+		defaults: defaults,
+		database: database,
+		inputs:   inputs,
+		spinner:  s,
+	}
+}
+
+func (m ProvisionModel) Init() tea.Cmd {
+	return textinput.Blink
+}
+
+// loadCIProfile fills the cloud-init fields from the named saved profile.
+func (m ProvisionModel) loadCIProfile() (ProvisionModel, tea.Cmd) {
+	name := strings.TrimSpace(m.inputs[provFieldCIProfile].Value())
+	if name == "" || m.database == nil {
+		m.profileNotice = "no profile name entered"
+		return m, nil
+	}
+	p, err := m.database.GetCloudInitProfile(name)
+	if err != nil {
+		m.profileNotice = "db error: " + err.Error()
+		return m, nil
+	}
+	if p == nil {
+		m.profileNotice = "profile not found: " + name
+		return m, nil
+	}
+	m.inputs[provFieldCIUser].SetValue(p.CIUser)
+	m.inputs[provFieldCIPassword].SetValue(p.CIPassword)
+	m.inputs[provFieldSSHKey].SetValue(p.CISSHKey)
+	m.inputs[provFieldIPConfig].SetValue(p.CIIPConfig)
+	m.profileNotice = "loaded cloud-init profile: " + p.Name
+	return m, nil
+}
+
+func (m ProvisionModel) submit() tea.Cmd {
+	client := m.client
+	node := m.node
+	database := m.database
+
+	templateID, _ := strconv.Atoi(m.inputs[provFieldTemplate].Value())
+	name := strings.TrimSpace(m.inputs[provFieldName].Value())
+	vmidStr := strings.TrimSpace(m.inputs[provFieldVMID].Value())
+	cpu, _ := strconv.Atoi(m.inputs[provFieldCPU].Value())
+	memory, _ := strconv.Atoi(m.inputs[provFieldMemory].Value())
+	storage := strings.TrimSpace(m.inputs[provFieldStorage].Value())
+	ciProfile := strings.TrimSpace(m.inputs[provFieldCIProfile].Value())
+	ciUser := strings.TrimSpace(m.inputs[provFieldCIUser].Value())
+	ciPassword := m.inputs[provFieldCIPassword].Value()
+	sshKey := strings.TrimSpace(m.inputs[provFieldSSHKey].Value())
+	ipConfig := strings.TrimSpace(m.inputs[provFieldIPConfig].Value())
+	saltProfile := strings.TrimSpace(m.inputs[provFieldSaltProfile].Value())
+	_ = cpu
+	_ = memory
+
+	batchCount, _ := strconv.Atoi(strings.TrimSpace(m.inputs[provFieldBatch].Value()))
+	if batchCount < 1 {
+		batchCount = 1
+	}
+
+	baseVMID := 0
+	if vmidStr != "" {
+		baseVMID, _ = strconv.Atoi(vmidStr)
+	}
+
+	defaults := m.defaults
+
+	return func() tea.Msg {
+		timeout := time.Duration(batchCount) * 90 * time.Second
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		var lastTaskID string
+		var lastVMID int
+
+		for i := 0; i < batchCount; i++ {
+			vmName := name
+			if batchCount > 1 {
+				vmName = fmt.Sprintf("%s-%02d", name, i+1)
+			}
+
+			newVMID := 0
+			if baseVMID != 0 {
+				newVMID = baseVMID + i
+			} else {
+				id, err := client.NextVMID(ctx)
+				if err != nil {
+					return provisionDoneMsg{err: fmt.Errorf("vm %d nextid: %w", i+1, err)}
+				}
+				newVMID = id
+			}
+
+			taskID, err := client.CloneVM(ctx, api.CloneOptions{
+				SourceNode: node.Name,
+				SourceVMID: templateID,
+				NewVMID:    newVMID,
+				Name:       vmName,
+				TargetNode: node.Name,
+				Storage:    storage,
+				Full:       storage != "",
+			})
+			if err != nil {
+				return provisionDoneMsg{count: i, err: fmt.Errorf("vm %d clone: %w", i+1, err)}
+			}
+
+			hasCIFields := ciUser != "" || ciPassword != "" || sshKey != "" || ipConfig != ""
+			if hasCIFields {
+				ciOpts := api.CloudInitOptions{
+					User:         ciUser,
+					Password:     ciPassword,
+					SSHKeys:      sshKey,
+					IPConfig:     ipConfig,
+					Nameserver:   defaults.Nameserver,
+					SearchDomain: defaults.SearchDomain,
+				}
+				if err := client.SetCloudInit(ctx, node.Name, newVMID, ciOpts); err != nil {
+					return provisionDoneMsg{
+						taskID: taskID,
+						count:  i,
+						err:    fmt.Errorf("vm %d cloud-init (cloned as %d): %w", i+1, newVMID, err),
+					}
+				}
+			}
+
+			if database != nil {
+				_ = database.RecordProvisionedVM(db.ProvisionedVM{
+					VMID:             newVMID,
+					Name:             vmName,
+					Node:             node.Name,
+					TemplateID:       templateID,
+					CloudInitProfile: ciProfile,
+					SaltProfile:      saltProfile,
+				})
+			}
+
+			lastTaskID = taskID
+			lastVMID = newVMID
+		}
+
+		return provisionDoneMsg{taskID: lastTaskID, vmid: lastVMID, count: batchCount}
+	}
+}
+
+func (m ProvisionModel) Update(msg tea.Msg) (ProvisionModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case provisionDoneMsg:
+		m.submitting = false
+		m.err = msg.err
+		if msg.err == nil {
+			if msg.count > 1 {
+				m.taskID = fmt.Sprintf("%d VMs cloned, last: %d — task %s", msg.count, msg.vmid, msg.taskID)
+			} else {
+				m.taskID = fmt.Sprintf("VM %d cloned — task %s", msg.vmid, msg.taskID)
+			}
+		}
+		return m, nil
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c", "q":
+			return m, tea.Quit
+		case "esc", "b":
+			return m, func() tea.Msg { return backMsg{} }
+		case "ctrl+l":
+			// Load a cloud-init profile by name
+			return m.loadCIProfile()
+		case "ctrl+s":
+			if m.inputs[provFieldName].Value() == "" {
+				m.err = fmt.Errorf("VM name is required")
+				return m, nil
+			}
+			m.submitting = true
+			m.err = nil
+			m.profileNotice = ""
+			return m, tea.Batch(m.spinner.Tick, m.submit())
+		case "tab", "enter", "down":
+			m.inputs[m.focused].Blur()
+			m.focused = (m.focused + 1) % provFieldCount
+			m.inputs[m.focused].Focus()
+			return m, textinput.Blink
+		case "shift+tab", "up":
+			m.inputs[m.focused].Blur()
+			m.focused = (m.focused - 1 + provFieldCount) % provFieldCount
+			m.inputs[m.focused].Focus()
+			return m, textinput.Blink
+		}
+	}
+
+	// Forward to focused input
+	var cmd tea.Cmd
+	m.inputs[m.focused], cmd = m.inputs[m.focused].Update(msg)
+	return m, cmd
+}
+
+func (m ProvisionModel) View() string {
+	var sb strings.Builder
+
+	sb.WriteString(styleTitle.Render("⚡ ratataskr") +
+		styleDim.Render(" › ") +
+		styleBold.Render(m.node.Name) +
+		styleDim.Render(" › ") +
+		styleBold.Render("provision VM") + "\n\n")
+
+	field := func(label string, idx int) {
+		prefix := "  "
+		if idx == m.focused {
+			prefix = styleCyan.Render("▶ ")
+		}
+		sb.WriteString(fmt.Sprintf("%s%-18s %s\n",
+			prefix,
+			styleDim.Render(label),
+			m.inputs[idx].View(),
+		))
+	}
+
+	sb.WriteString(styleDim.Render("  Clone from template") + "\n")
+	field("Template VMID", provFieldTemplate)
+	field("New VM Name", provFieldName)
+	field("New VMID", provFieldVMID)
+	sb.WriteString("\n")
+
+	sb.WriteString(styleDim.Render("  Resources") + "\n")
+	field("CPU cores", provFieldCPU)
+	field("Memory (MiB)", provFieldMemory)
+	field("Storage pool", provFieldStorage)
+	sb.WriteString("\n")
+
+	sb.WriteString(styleDim.Render("  Cloud-init") + "\n")
+	field("CI Profile", provFieldCIProfile)
+	field("User", provFieldCIUser)
+	field("Password", provFieldCIPassword)
+	field("SSH public key", provFieldSSHKey)
+	field("IP config", provFieldIPConfig)
+	sb.WriteString("\n")
+
+	sb.WriteString(styleDim.Render("  Salt") + "\n")
+	field("Salt Profile", provFieldSaltProfile)
+	sb.WriteString("\n")
+
+	sb.WriteString(styleDim.Render("  Batch") + "\n")
+	field("VM count", provFieldBatch)
+
+	sb.WriteString("\n")
+
+	if m.profileNotice != "" {
+		sb.WriteString(styleRunning.Render("  ✦ "+m.profileNotice) + "\n")
+	}
+
+	if m.submitting {
+		sb.WriteString("  " + m.spinner.View() + " provisioning...\n\n")
+	} else if m.err != nil {
+		sb.WriteString(styleError.Render("  error: "+m.err.Error()) + "\n\n")
+	} else if m.taskID != "" {
+		sb.WriteString(styleRunning.Render("  ✓ "+m.taskID) + "\n\n")
+	}
+
+	sb.WriteString(styleDim.Render("  " + strings.Repeat("─", max(m.width-4, 50))) + "\n")
+	sb.WriteString(styleHelp.Render("  tab/↓ next  shift+tab/↑ prev  ctrl+L load CI profile  ctrl+s submit  esc cancel") + "\n")
+	return sb.String()
+}
