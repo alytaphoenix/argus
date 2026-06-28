@@ -26,30 +26,71 @@ type svcTemplate struct {
 }
 
 var serviceTemplates = []svcTemplate{
+	// ── Proxmox ──────────────────────────────────────────────────────────────
 	{"Proxmox Web UI", 8006, "https", ""},
+
+	// ── Reverse proxy ────────────────────────────────────────────────────────
+	// /ping requires --ping flag in Traefik config; runs on the same entrypoint.
+	{"Traefik HTTP", 80, "http", "/ping"},
+	{"Traefik Dashboard", 8080, "http", "/ping"},
+
+	// ── Container management ─────────────────────────────────────────────────
+	{"Portainer", 9443, "https", "/api/status"},
+	{"Docker Engine API", 2376, "https", "/info"},
+
+	// ── Observability stack ───────────────────────────────────────────────────
 	{"Grafana", 3000, "http", "/api/health"},
 	{"Prometheus", 9090, "http", "/-/healthy"},
 	{"Alertmanager", 9093, "http", "/-/healthy"},
 	{"Loki", 3100, "http", "/ready"},
 	{"Node Exporter", 9100, "tcp", ""},
-	{"Gitea", 3001, "http", "/api/healthz"},
-	{"Vault", 8200, "https", "/v1/sys/health"},
+	{"Netdata", 19999, "http", "/api/v1/info"},
+	{"Uptime Kuma", 3001, "http", "/"},
+
+	// ── Storage ──────────────────────────────────────────────────────────────
+	// MinIO health is on port 9000 (S3 API), not 9001 (Console UI).
+	{"MinIO S3 API", 9000, "http", "/minio/health/live"},
+	{"MinIO Console", 9001, "http", "/"},
 	{"Harbor", 443, "https", "/api/v2.0/health"},
 	{"Nextcloud", 443, "https", "/status.php"},
-	{"Home Assistant", 8123, "http", "/api/"},
-	{"Jellyfin", 8096, "http", "/health"},
-	{"Authentik", 9000, "https", "/api/v3/-/health/live/"},
-	{"MinIO", 9001, "https", "/minio/health/live"},
-	{"AdGuard Home", 3001, "http", "/control/status"},
-	{"Uptime Kuma", 3001, "http", ""},
-	{"Technitium DNS", 5380, "http", "/api/user/login"},
-	{"Wazuh Dashboard", 443, "https", ""},
+
+	// ── Identity & secrets ────────────────────────────────────────────────────
+	// Authentik native port 9000 is HTTP; HTTPS is 9443 or via Traefik.
+	{"Authentik", 9000, "http", "/-/health/live/"},
+	{"Vault", 8200, "https", "/v1/sys/health"},
 	{"Smallstep CA", 9000, "https", "/health"},
+
+	// ── Security ─────────────────────────────────────────────────────────────
+	// CrowdSec LAPI has no unauthenticated HTTP endpoint; TCP confirms process is up.
+	{"CrowdSec API", 8080, "tcp", ""},
+	// Wazuh Dashboard (OpenSearch Dashboards): /api/status bypasses auth by default.
+	{"Wazuh Dashboard", 443, "https", "/api/status"},
+
+	// ── DNS ───────────────────────────────────────────────────────────────────
+	// Technitium: /api/user/login requires credentials; root returns the UI.
+	{"Technitium DNS", 5380, "http", "/"},
+	// AdGuard Home: setup wizard runs on 3000, permanent UI defaults to port 80.
+	{"AdGuard Home", 80, "http", "/"},
+
+	// ── Apps ─────────────────────────────────────────────────────────────────
+	{"Gitea", 3000, "http", "/api/healthz"},
+	// Home Assistant has no unauthenticated health endpoint; root returns the SPA shell.
+	{"Home Assistant", 8123, "http", "/"},
+	{"Jellyfin", 8096, "http", "/health"},
+
+	// ── Homelab infra ─────────────────────────────────────────────────────────
 	{"Matchbox PXE", 8080, "http", "/"},
-	{"CrowdSec API", 8080, "http", "/v1/decisions"},
-	{"Traefik Dashboard", 8080, "http", "/api/rawdata"},
-	{"Portainer", 9443, "https", "/api/status"},
-	{"Netdata", 19999, "http", "/api/v1/info"},
+
+	// ── Hermes AI agent ───────────────────────────────────────────────────────
+	{"Hermes Dashboard", 9119, "http", "/"},
+	// API server port 8642 — enable with API_SERVER_HOST + API_SERVER_KEY env vars.
+	{"Hermes API Server", 8642, "http", "/v1/models"},
+	// Gateway webhook port only active when a webhook platform (e.g. Telegram) is configured.
+	{"Hermes Gateway Webhook", 8443, "tcp", ""},
+
+	// ── Signal ────────────────────────────────────────────────────────────────
+	// signal-cli HTTP daemon: ghcr.io/bbernhard/signal-cli-rest-api, port 8080.
+	{"signal-cli REST API", 8080, "http", "/v1/about"},
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
