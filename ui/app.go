@@ -418,8 +418,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case settingsSavedMsg:
-		// Reload app settings whenever anything is saved in the Settings screen
+		// Reload app settings and push to any active sub-models that hold a copy.
 		a.loadAppSettings()
+		a.security.appSettings = a.appSettings
+		a.services.appSettings = a.appSettings
 
 	case openResizeMsg:
 		a.screen = screenResize

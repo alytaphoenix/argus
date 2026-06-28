@@ -400,6 +400,7 @@ func (m ServicesModel) runHealthChecks() tea.Cmd {
 				Host:   s.Host,
 				Port:   s.Port,
 				Scheme: api.ServiceScheme(s.Scheme),
+				Path:   s.Notes,
 			})
 		}
 		results := api.CheckAll(ctx, checks)

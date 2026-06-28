@@ -182,7 +182,7 @@ func (m SecurityModel) loadWazuh() tea.Cmd {
 		if err != nil {
 			return wazuhLoadedMsg{err: err}
 		}
-		alerts, _ := client.RecentAlerts(ctx)
+		alerts, alertErr := client.RecentAlerts(ctx)
 		summary := api.SummariseAgents(agents, alerts)
 
 		if database != nil {
@@ -229,7 +229,7 @@ func (m SecurityModel) loadWazuh() tea.Cmd {
 				})
 			}
 		}
-		return wazuhLoadedMsg{agents: agents, alerts: alerts, summary: summary}
+		return wazuhLoadedMsg{agents: agents, alerts: alerts, summary: summary, alertErr: alertErr}
 	}
 }
 
@@ -443,17 +443,24 @@ func (m SecurityModel) Update(msg tea.Msg) (SecurityModel, tea.Cmd) {
 			m.wazuhAgents = msg.agents
 			m.wazuhAlerts = msg.alerts
 			m.wazuhSummary = msg.summary
+			if msg.alertErr != nil {
+				m.notice = "Wazuh alerts unavailable: " + msg.alertErr.Error()
+			}
 		}
 		return m, nil
 
 	case secHistoryLoadedMsg:
-		if msg.err == nil {
+		if msg.err != nil {
+			m.notice = "history: " + msg.err.Error()
+		} else {
 			m.history = msg.events
 		}
 		return m, nil
 
 	case secScanHistoryMsg:
-		if msg.err == nil {
+		if msg.err != nil {
+			m.notice = "scan history: " + msg.err.Error()
+		} else {
 			m.scanSavedResult = msg.results
 		}
 		return m, nil

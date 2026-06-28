@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -141,18 +142,30 @@ func (c *PlexClient) Ping(ctx context.Context) error {
 // AddLibrary adds a new library section to Plex via the API.
 func (c *PlexClient) AddLibrary(ctx context.Context, name, libType, path string) error {
 	agent := "tv.plex.agents.movie"
-	scanner := "Plex%20Movie"
+	scanner := "Plex Movie"
 	switch libType {
 	case "show":
 		agent = "tv.plex.agents.series"
-		scanner = "Plex%20TV%20Series"
+		scanner = "Plex TV Series"
 	case "artist":
 		agent = "tv.plex.agents.music"
-		scanner = "Plex%20Music"
+		scanner = "Plex Music"
+	case "photo":
+		agent = "com.plexapp.agents.none"
+		scanner = "Plex Photo"
 	}
-	url := fmt.Sprintf("%s/library/sections?name=%s&type=%s&agent=%s&scanner=%s&language=en&importFromiTunes=&enableAutoPhotoTags=&location=%s&X-Plex-Token=%s",
-		c.base, name, libType, agent, scanner, path, c.token)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	q := url.Values{}
+	q.Set("name", name)
+	q.Set("type", libType)
+	q.Set("agent", agent)
+	q.Set("scanner", scanner)
+	q.Set("language", "en")
+	q.Set("importFromiTunes", "")
+	q.Set("enableAutoPhotoTags", "")
+	q.Set("location", path)
+	q.Set("X-Plex-Token", c.token)
+	reqURL := c.base + "/library/sections?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, nil)
 	if err != nil {
 		return err
 	}

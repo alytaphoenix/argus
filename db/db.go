@@ -484,6 +484,37 @@ CREATE INDEX IF NOT EXISTS idx_maint_steps_run ON maintenance_run_steps(run_id);
 		return err
 	}
 
+	// v16 — rebuild certificates table with UNIQUE(host, port) so fingerprint
+	// format changes across upgrades don't cause duplicate rows.
+	if _, err := d.sql.Exec(`
+CREATE TABLE IF NOT EXISTS certificates_new (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    host         TEXT NOT NULL,
+    port         INTEGER NOT NULL DEFAULT 443,
+    common_name  TEXT NOT NULL DEFAULT '',
+    san_names    TEXT NOT NULL DEFAULT '',
+    issuer       TEXT NOT NULL DEFAULT '',
+    serial       TEXT NOT NULL DEFAULT '',
+    not_before   DATETIME,
+    not_after    DATETIME,
+    fingerprint  TEXT NOT NULL DEFAULT '',
+    last_seen_at DATETIME,
+    UNIQUE(host, port)
+);
+INSERT OR REPLACE INTO certificates_new
+    (host, port, common_name, san_names, issuer, serial,
+     not_before, not_after, fingerprint, last_seen_at)
+    SELECT host, port, common_name, san_names, issuer, serial,
+           not_before, not_after, fingerprint, last_seen_at
+    FROM certificates
+    GROUP BY host, port;
+DROP TABLE IF EXISTS certificates;
+ALTER TABLE certificates_new RENAME TO certificates;
+CREATE INDEX IF NOT EXISTS idx_certs_expiry ON certificates(not_after);
+`); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -544,22 +575,13 @@ func (d *DB) GetSetting(key, defaultVal string) string {
 	return val
 }
 
-// SetSetting persists a setting value.
+// SetSetting persists a setting value, inserting the key if it doesn't exist yet.
 func (d *DB) SetSetting(key, value string) error {
-	res, err := d.sql.Exec(`
-UPDATE app_settings SET value=?, updated_at=? WHERE key=?`,
-		value, time.Now(), key)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return fmt.Errorf("setting %q not found", key)
-	}
-	return nil
+	_, err := d.sql.Exec(`
+INSERT INTO app_settings(key, value, description, updated_at) VALUES(?, ?, '', ?)
+ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+		key, value, time.Now())
+	return err
 }
 
 // AllSettings returns all settings ordered by key.
@@ -1405,10 +1427,11 @@ func (d *DB) UpsertCertificate(c Certificate) error {
 INSERT INTO certificates (host, port, common_name, san_names, issuer, serial,
                           not_before, not_after, fingerprint, last_seen_at)
 VALUES (?,?,?,?,?,?,?,?,?,?)
-ON CONFLICT(host, port, fingerprint) DO UPDATE SET
+ON CONFLICT(host, port) DO UPDATE SET
     common_name=excluded.common_name, san_names=excluded.san_names,
     issuer=excluded.issuer, serial=excluded.serial,
     not_before=excluded.not_before, not_after=excluded.not_after,
+    fingerprint=excluded.fingerprint,
     last_seen_at=excluded.last_seen_at`,
 		c.Host, c.Port, c.CommonName, c.SANNames, c.Issuer, c.Serial,
 		c.NotBefore, c.NotAfter, c.Fingerprint, time.Now())

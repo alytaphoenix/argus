@@ -218,10 +218,11 @@ type crowdSecLoadedMsg struct {
 	err       error
 }
 type wazuhLoadedMsg struct {
-	agents  []api.WazuhAgent
-	alerts  []api.WazuhAlert
-	summary api.WazuhSummary
-	err     error
+	agents   []api.WazuhAgent
+	alerts   []api.WazuhAlert
+	summary  api.WazuhSummary
+	err      error
+	alertErr error // non-nil if alerts endpoint failed (non-fatal; varies by Wazuh version)
 }
 type secHistoryLoadedMsg struct {
 	events []db.SecurityEvent

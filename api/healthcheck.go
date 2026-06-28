@@ -26,6 +26,7 @@ type ServiceCheck struct {
 	Host   string
 	Port   int
 	Scheme ServiceScheme
+	Path   string // HTTP/HTTPS health-check path, e.g. "/api/health"; empty = root
 }
 
 // HealthResult is the outcome of a single health check.
@@ -97,7 +98,10 @@ func checkHTTP(ctx context.Context, sc ServiceCheck, addr string, useTLS bool) H
 	if useTLS {
 		scheme = "https"
 	}
-	url := fmt.Sprintf("%s://%s", scheme, addr)
+	urlStr := fmt.Sprintf("%s://%s", scheme, addr)
+	if sc.Path != "" {
+		urlStr += sc.Path
+	}
 
 	// Use a transport that captures TLS info and doesn't follow redirects blindly.
 	var certInfo *CertInfo
@@ -119,13 +123,12 @@ func checkHTTP(ctx context.Context, sc ServiceCheck, addr string, useTLS bool) H
 
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   8 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse // don't follow redirects
 		},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		res.Error = err.Error()
 		return res
@@ -143,7 +146,7 @@ func checkHTTP(ctx context.Context, sc ServiceCheck, addr string, useTLS bool) H
 	}
 	resp.Body.Close()
 	res.StatusCode = resp.StatusCode
-	res.Up = resp.StatusCode < 400
+	res.Up = resp.StatusCode < 500
 	res.CertInfo = certInfo
 	return res
 }
