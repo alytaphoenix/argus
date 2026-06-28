@@ -172,6 +172,10 @@ type serviceAddedMsg struct {
 	err error
 }
 type serviceDeletedMsg struct{ err error }
+type svcWiringAppliedMsg struct {
+	notice string
+	err    error
+}
 type dnsAddedMsg struct{ err error }
 type dnsDeletedMsg struct{ err error }
 type caHealthMsg struct {

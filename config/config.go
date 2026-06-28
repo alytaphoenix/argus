@@ -160,11 +160,14 @@ type NomadConfig struct {
 }
 
 type SaltConfig struct {
-	URL      string `toml:"url"`
-	Username string `toml:"username"`
-	Password string `toml:"password"`
-	Eauth    string `toml:"eauth"`    // defaults to "pam"
-	Insecure bool   `toml:"insecure"` // skip TLS verify
+	URL          string `toml:"url"`
+	Username     string `toml:"username"`
+	Password     string `toml:"password"`
+	Eauth        string `toml:"eauth"`         // defaults to "pam"
+	Insecure     bool   `toml:"insecure"`      // skip TLS verify
+	MasterMinion string `toml:"master_minion"` // minion ID of the salt-master host (for file writes)
+	PillarBase   string `toml:"pillar_base"`   // pillar root on master, default /srv/pillar
+	StateBase    string `toml:"state_base"`    // state root on master, default /srv/salt
 }
 
 func Load() (*Config, error) {

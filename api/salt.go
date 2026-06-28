@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -329,4 +331,34 @@ func (c *SaltClient) JobsForMinion(ctx context.Context, minionID string) ([]Job,
 		filtered = filtered[:10]
 	}
 	return filtered, nil
+}
+
+// WriteFile writes content to a file on the named minion using cmd.run + base64.
+// masterMinion must be a minion whose grain id matches the salt-master host.
+// The path must be absolute; its parent directory is created with mkdir -p.
+func (c *SaltClient) WriteFile(ctx context.Context, masterMinion, filePath, content string) error {
+	encoded := base64.StdEncoding.EncodeToString([]byte(content))
+	dir := path.Dir(filePath)
+	// base64 output is [A-Za-z0-9+/=] — safe to single-quote without escaping
+	cmd := fmt.Sprintf("mkdir -p '%s' && echo '%s' | base64 -d > '%s'", dir, encoded, filePath)
+	raw, err := c.saltRun(ctx, map[string]interface{}{
+		"client":  "local",
+		"tgt":     masterMinion,
+		"fun":     "cmd.run",
+		"arg":     []string{cmd},
+		"timeout": 15,
+	})
+	if err != nil {
+		return err
+	}
+	var result map[string]string
+	if jsonErr := json.Unmarshal(raw, &result); jsonErr != nil {
+		return nil // unparseable → assume success (e.g. minion returned raw string)
+	}
+	for _, v := range result {
+		if strings.HasPrefix(strings.TrimSpace(v), "Error") {
+			return fmt.Errorf("remote: %s", v)
+		}
+	}
+	return nil
 }

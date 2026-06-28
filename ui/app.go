@@ -241,7 +241,7 @@ func (a App) switchSection(next screenID) (App, tea.Cmd) {
 		return a, a.metrics.Init()
 	case screenServices:
 		a.screen = screenServices
-		a.services = NewServicesModel(a.dnsClient, a.caClient, a.trueNASClient, a.database, a.cfg, a.appSettings)
+		a.services = NewServicesModel(a.dnsClient, a.caClient, a.trueNASClient, a.database, a.cfg, a.appSettings, a.saltClient)
 		a.services.width, a.services.height = a.width, a.height
 		return a, a.services.Init()
 	case screenPXE:

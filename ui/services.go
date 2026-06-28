@@ -205,10 +205,18 @@ type ServicesModel struct {
 	loading     bool
 	spinner     spinner.Model
 	notice      string
+
+	// Salt wiring
+	saltClient   *api.SaltClient
+	masterMinion string // minion ID of the salt-master host
+	pillarBase   string // /srv/pillar
+	stateBase    string // /srv/salt
+	domain       string // e.g. "home.arpa" for FQDN derivation
 }
 
 func NewServicesModel(dnsClient *api.TechnitiumClient, caClient *api.StepCAClient,
-	trueNASClient *api.TrueNASClient, database *db.DB, cfg config.Config, appSettings db.AppSettings) ServicesModel {
+	trueNASClient *api.TrueNASClient, database *db.DB, cfg config.Config, appSettings db.AppSettings,
+	saltClient *api.SaltClient) ServicesModel {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 
@@ -232,6 +240,15 @@ func NewServicesModel(dnsClient *api.TechnitiumClient, caClient *api.StepCAClien
 	}
 	dnsFields[dnsFieldTTL].SetValue("300")
 
+	pillarBase := cfg.Salt.PillarBase
+	if pillarBase == "" {
+		pillarBase = "/srv/pillar"
+	}
+	stateBase := cfg.Salt.StateBase
+	if stateBase == "" {
+		stateBase = "/srv/salt"
+	}
+
 	return ServicesModel{
 		dnsClient:     dnsClient,
 		caClient:      caClient,
@@ -244,14 +261,19 @@ func NewServicesModel(dnsClient *api.TechnitiumClient, caClient *api.StepCAClien
 		uptimePct:     make(map[int64]float64),
 		serviceHosts:  make(map[string]db.ServiceHost),
 		bannedHosts:   make(map[string]bool),
-		svcFields:      svcFields,
-		dnsFields:      dnsFields,
+		svcFields:     svcFields,
+		dnsFields:     dnsFields,
 		templateFilter: func() textinput.Model {
 			ti := textinput.New()
 			ti.Placeholder = "filter templates…"
 			ti.CharLimit = 64
 			return ti
 		}(),
+		saltClient:   saltClient,
+		masterMinion: cfg.Salt.MasterMinion,
+		pillarBase:   pillarBase,
+		stateBase:    stateBase,
+		domain:       cfg.Globals.Domain,
 	}
 }
 
@@ -582,6 +604,82 @@ func (m ServicesModel) deleteServiceCmd(id int64) tea.Cmd {
 	}
 }
 
+// wiringApplyCmd pushes the full services pillar and the wiring state template to
+// the Salt master minion, then applies services.wiring. The pillar file is always
+// regenerated from the current DB — so deleted services are automatically removed.
+func (m ServicesModel) wiringApplyCmd() tea.Cmd {
+	saltClient := m.saltClient
+	masterMinion := m.masterMinion
+	pillarPath := m.pillarBase + "/ratataskr_services.sls"
+	statePath := m.stateBase + "/services/wiring.sls"
+	pillarContent := m.allServicesPillarYAML()
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := saltClient.WriteFile(ctx, masterMinion, pillarPath, pillarContent); err != nil {
+			return svcWiringAppliedMsg{err: fmt.Errorf("pillar: %w", err)}
+		}
+		if err := saltClient.WriteFile(ctx, masterMinion, statePath, api.WiringStateTemplate); err != nil {
+			return svcWiringAppliedMsg{err: fmt.Errorf("state: %w", err)}
+		}
+		jid, err := saltClient.ApplyState(ctx, masterMinion, "services.wiring")
+		if err != nil {
+			return svcWiringAppliedMsg{err: fmt.Errorf("apply: %w", err)}
+		}
+		return svcWiringAppliedMsg{notice: "wiring dispatched — JID " + jid}
+	}
+}
+
+// allServicesPillarYAML generates the full ratataskr_services.sls pillar from
+// the current services list. Regenerate and re-push on every 'w' so deletions
+// are reflected without manual cleanup.
+func (m ServicesModel) allServicesPillarYAML() string {
+	var sb strings.Builder
+	sb.WriteString("# ratataskr-managed — do not edit; regenerated with 'w' from the Services screen\n")
+	sb.WriteString("# Add to /srv/pillar/top.sls: base: '<master_minion>': [ratataskr_services]\n")
+	sb.WriteString("services:\n")
+	seen := map[string]bool{}
+	for _, svc := range m.services {
+		slug := serviceSlug(svc.Name)
+		if slug == "" || seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		fqdn := slug
+		zone := m.domain
+		if m.domain != "" {
+			fqdn = slug + "." + m.domain
+		}
+		sb.WriteString(fmt.Sprintf("  %s:\n", slug))
+		sb.WriteString(fmt.Sprintf("    host: \"%s\"\n", svc.Host))
+		sb.WriteString(fmt.Sprintf("    port: %d\n", svc.Port))
+		sb.WriteString(fmt.Sprintf("    scheme: \"%s\"\n", svc.Scheme))
+		sb.WriteString(fmt.Sprintf("    fqdn: \"%s\"\n", fqdn))
+		sb.WriteString(fmt.Sprintf("    dns_zone: \"%s\"\n", zone))
+		sb.WriteString("    traefik: true\n")
+		sb.WriteString("    cert: false\n")
+	}
+	return sb.String()
+}
+
+// serviceSlug converts a service name to a safe Salt state ID: [a-z0-9-] only.
+func serviceSlug(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	s := b.String()
+	for strings.Contains(s, "--") {
+		s = strings.ReplaceAll(s, "--", "-")
+	}
+	return strings.Trim(s, "-")
+}
+
 func (m ServicesModel) addDNSCmd() tea.Cmd {
 	client := m.dnsClient
 	zone := m.dnsZone
@@ -724,6 +822,14 @@ func (m ServicesModel) Update(msg tea.Msg) (ServicesModel, tea.Cmd) {
 			}
 		}
 		return m, m.loadAll()
+
+	case svcWiringAppliedMsg:
+		if msg.err != nil {
+			m.notice = "wiring: " + msg.err.Error()
+		} else {
+			m.notice = msg.notice
+		}
+		return m, nil
 
 	case dnsAddedMsg:
 		m.addingDNS = false
@@ -947,6 +1053,13 @@ func (m ServicesModel) handleSvcTab(key string) (ServicesModel, tea.Cmd) {
 			m.notice = fmt.Sprintf("scanning %s…", host)
 			return m, m.discoverHostCmd(host)
 		}
+	case "w":
+		if m.saltClient == nil || m.masterMinion == "" {
+			m.notice = "salt wiring: set [salt] master_minion in config"
+			return m, nil
+		}
+		m.notice = "pushing pillar + state to " + m.masterMinion + "…"
+		return m, m.wiringApplyCmd()
 	}
 	return m, nil
 }
@@ -1835,7 +1948,11 @@ func (m ServicesModel) helpString() string {
 		if m.pickingTemplate {
 			return "  ↑/↓ navigate · enter apply · esc cancel"
 		}
-		return "  ↑/↓ navigate · a add · ctrl+t template · d delete · r health-check · p provision/register · D discover · ←/→ tab"
+		hint := "  ↑/↓ navigate · a add · ctrl+t template · d delete · r health-check · p provision/register · D discover"
+		if m.saltClient != nil && m.masterMinion != "" {
+			hint += " · w wire (salt)"
+		}
+		return hint + " · ←/→ tab"
 	case svcTabDNS:
 		if m.addingDNS {
 			return "  tab/enter advance · esc cancel"
