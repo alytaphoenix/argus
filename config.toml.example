@@ -28,12 +28,19 @@ timezone    = "UTC"          # IANA timezone for log display (e.g. "America/New_
 admin_email = ""             # operator email for cert SANs / notifications
 
 # Salt — optional; omit to disable the minions screen (m)
+# master_minion: the minion ID of your salt-master host (usually its hostname).
+# Required for 'w' (service wiring) in the Services screen — ratataskr writes pillar
+# files to the master by running cmd.run on this minion.
+# Add to /srv/pillar/top.sls: base: '<master_minion>': [ratataskr_services]
 [salt]
-url      = "https://salt.yourdomain.com:8000"
-username = "saltapi"
-password = "yourpassword"
-eauth    = "pam"    # pam (default), ldap, file
-insecure = true
+url           = "https://salt.yourdomain.com:8000"
+username      = "saltapi"
+password      = "yourpassword"
+eauth         = "pam"           # pam (default), ldap, file
+insecure      = true
+master_minion = "salt-master"   # minion ID of the salt-master host; required for service wiring
+pillar_base   = "/srv/pillar"   # default; only set if your master uses a non-standard path
+state_base    = "/srv/salt"     # default; only set if your master uses a non-standard path
 
 # Nomad — optional; omit to disable the jobs screen (n)
 [nomad]
