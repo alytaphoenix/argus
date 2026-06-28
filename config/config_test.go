@@ -336,6 +336,61 @@ api_key = "radarrkey"
 	}
 }
 
+func TestSaltWiringConfigDefaults(t *testing.T) {
+	cfg := &Config{}
+	cfg.ApplyGlobals()
+	if cfg.Salt.MasterMinion != "" {
+		t.Errorf("MasterMinion = %q, want empty", cfg.Salt.MasterMinion)
+	}
+	if cfg.Salt.PillarBase != "" {
+		t.Errorf("PillarBase = %q, want empty (ServicesModel fills default /srv/pillar)", cfg.Salt.PillarBase)
+	}
+	if cfg.Salt.StateBase != "" {
+		t.Errorf("StateBase = %q, want empty (ServicesModel fills default /srv/salt)", cfg.Salt.StateBase)
+	}
+}
+
+func TestSaltWiringConfigFromFile(t *testing.T) {
+	dir := t.TempDir()
+	cfgDir := filepath.Join(dir, ".config", "ratataskr")
+	os.MkdirAll(cfgDir, 0o700)
+	os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(`
+host     = "https://pve:8006"
+token_id = "root@pam!tok"
+secret   = "secret"
+
+[salt]
+url           = "https://salt.local:8000"
+username      = "saltuser"
+password      = "saltpass"
+master_minion = "salt-master"
+pillar_base   = "/data/pillar"
+state_base    = "/data/salt"
+`), 0o600)
+
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", dir)
+	cleanup := setEnv(t, "PROXMOX_HOST", "", "PROXMOX_TOKEN_ID", "", "PROXMOX_SECRET", "")
+	defer func() {
+		os.Setenv("HOME", origHome)
+		cleanup()
+	}()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Salt.MasterMinion != "salt-master" {
+		t.Errorf("MasterMinion = %q, want salt-master", cfg.Salt.MasterMinion)
+	}
+	if cfg.Salt.PillarBase != "/data/pillar" {
+		t.Errorf("PillarBase = %q, want /data/pillar", cfg.Salt.PillarBase)
+	}
+	if cfg.Salt.StateBase != "/data/salt" {
+		t.Errorf("StateBase = %q, want /data/salt", cfg.Salt.StateBase)
+	}
+}
+
 func TestLoadEnvOverridesFileValues(t *testing.T) {
 	// Write a config file, then override with env vars.
 	dir := t.TempDir()

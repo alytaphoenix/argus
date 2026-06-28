@@ -693,3 +693,411 @@ func TestSaltApplyEvents(t *testing.T) {
 		t.Errorf("ErrorMsg = %q, want timeout", events[0].ErrorMsg)
 	}
 }
+
+// ── Service CRUD ──────────────────────────────────────────────────────────────
+
+func TestServiceCRUD(t *testing.T) {
+	d := openTestDB(t)
+
+	svc := Service{Name: "Grafana", Node: "pve-1", Host: "10.0.0.5", Port: 3000, Scheme: "http", Enabled: true}
+	id, err := d.SaveService(svc)
+	if err != nil {
+		t.Fatalf("SaveService: %v", err)
+	}
+	if id == 0 {
+		t.Fatal("SaveService returned id=0")
+	}
+
+	svcs, err := d.Services()
+	if err != nil {
+		t.Fatalf("Services: %v", err)
+	}
+	if len(svcs) != 1 {
+		t.Fatalf("len(Services) = %d, want 1", len(svcs))
+	}
+	got := svcs[0]
+	if got.Name != "Grafana" || got.Host != "10.0.0.5" || got.Port != 3000 || got.Scheme != "http" {
+		t.Errorf("unexpected service: %+v", got)
+	}
+	if !got.Enabled {
+		t.Error("Enabled = false, want true")
+	}
+
+	// Second service
+	svc2 := Service{Name: "Prometheus", Host: "10.0.0.5", Port: 9090, Scheme: "http", Enabled: true}
+	if _, err := d.SaveService(svc2); err != nil {
+		t.Fatalf("SaveService second: %v", err)
+	}
+	svcs, _ = d.Services()
+	if len(svcs) != 2 {
+		t.Fatalf("len(Services) = %d, want 2", len(svcs))
+	}
+
+	// Delete
+	if err := d.DeleteService(id); err != nil {
+		t.Fatalf("DeleteService: %v", err)
+	}
+	svcs, _ = d.Services()
+	if len(svcs) != 1 {
+		t.Fatalf("after delete: len(Services) = %d, want 1", len(svcs))
+	}
+	if svcs[0].Name != "Prometheus" {
+		t.Errorf("remaining service = %q, want Prometheus", svcs[0].Name)
+	}
+}
+
+// ── Certificate CRUD ──────────────────────────────────────────────────────────
+
+func TestCertificateCRUD(t *testing.T) {
+	d := openTestDB(t)
+
+	now := time.Now()
+	cert := Certificate{
+		Host:        "grafana.home.arpa",
+		Port:        443,
+		CommonName:  "grafana.home.arpa",
+		SANNames:    "grafana.home.arpa",
+		Issuer:      "Homelab CA",
+		Serial:      "01",
+		NotBefore:   now,
+		NotAfter:    now.Add(90 * 24 * time.Hour),
+		Fingerprint: "abc123",
+	}
+	if err := d.UpsertCertificate(cert); err != nil {
+		t.Fatalf("UpsertCertificate: %v", err)
+	}
+
+	certs, err := d.Certificates()
+	if err != nil {
+		t.Fatalf("Certificates: %v", err)
+	}
+	if len(certs) != 1 {
+		t.Fatalf("len(Certificates) = %d, want 1", len(certs))
+	}
+	if certs[0].CommonName != "grafana.home.arpa" {
+		t.Errorf("CommonName = %q, want grafana.home.arpa", certs[0].CommonName)
+	}
+
+	// Upsert same host+port with different fingerprint — should update, not insert
+	cert.Fingerprint = "newfingerprint"
+	if err := d.UpsertCertificate(cert); err != nil {
+		t.Fatalf("UpsertCertificate update: %v", err)
+	}
+	certs, _ = d.Certificates()
+	if len(certs) != 1 {
+		t.Fatalf("after upsert: len(Certificates) = %d, want 1 (dedup by host+port)", len(certs))
+	}
+	if certs[0].Fingerprint != "newfingerprint" {
+		t.Errorf("Fingerprint = %q, want newfingerprint", certs[0].Fingerprint)
+	}
+
+	// DaysUntilExpiry
+	days := certs[0].DaysUntilExpiry()
+	if days < 88 || days > 91 {
+		t.Errorf("DaysUntilExpiry = %d, want ~90", days)
+	}
+}
+
+// ── Node metrics ──────────────────────────────────────────────────────────────
+
+func TestNodeMetrics(t *testing.T) {
+	d := openTestDB(t)
+
+	for i := 0; i < 5; i++ {
+		if err := d.RecordNodeMetrics("pve-1", float64(i)*0.1, 0.5, 1000, 8192); err != nil {
+			t.Fatalf("RecordNodeMetrics: %v", err)
+		}
+	}
+
+	pts, err := d.NodeMetricsHistory("pve-1", 10)
+	if err != nil {
+		t.Fatalf("NodeMetricsHistory: %v", err)
+	}
+	if len(pts) != 5 {
+		t.Fatalf("len(pts) = %d, want 5", len(pts))
+	}
+	// Returned oldest-first; last point has cpu_ratio 0.4
+	if pts[len(pts)-1].CPURatio < 0.39 || pts[len(pts)-1].CPURatio > 0.41 {
+		t.Errorf("last CPURatio = %v, want ~0.4", pts[len(pts)-1].CPURatio)
+	}
+	// Wrong node returns empty
+	pts2, _ := d.NodeMetricsHistory("pve-99", 10)
+	if len(pts2) != 0 {
+		t.Errorf("wrong node: len(pts) = %d, want 0", len(pts2))
+	}
+	// Prune all
+	if err := d.PruneNodeMetrics(0); err != nil {
+		t.Fatalf("PruneNodeMetrics: %v", err)
+	}
+	pts, _ = d.NodeMetricsHistory("pve-1", 10)
+	if len(pts) != 0 {
+		t.Fatalf("after prune: len(pts) = %d, want 0", len(pts))
+	}
+}
+
+// ── Service uptime ────────────────────────────────────────────────────────────
+
+func TestServiceUptime(t *testing.T) {
+	d := openTestDB(t)
+
+	// No data → -1
+	pct := d.ServiceUptimePct(999)
+	if pct != -1 {
+		t.Errorf("no data: pct = %v, want -1", pct)
+	}
+
+	svcID, _ := d.SaveService(Service{Name: "test", Host: "10.0.0.1", Port: 80, Scheme: "tcp", Enabled: true})
+
+	// 3 up, 1 down → 75%
+	for i := 0; i < 3; i++ {
+		d.RecordServiceUptime(svcID, true)  //nolint:errcheck
+	}
+	d.RecordServiceUptime(svcID, false) //nolint:errcheck
+
+	pct = d.ServiceUptimePct(svcID)
+	if pct < 0.74 || pct > 0.76 {
+		t.Errorf("pct = %v, want 0.75", pct)
+	}
+}
+
+// ── Runbook CRUD ──────────────────────────────────────────────────────────────
+
+func TestRunbookCRUD(t *testing.T) {
+	d := openTestDB(t)
+
+	rb := Runbook{Name: "update-nodes", Description: "Run apt upgrade", StepsJSON: `["step1"]`}
+	id, err := d.SaveRunbook(rb)
+	if err != nil {
+		t.Fatalf("SaveRunbook: %v", err)
+	}
+	if id == 0 {
+		t.Fatal("SaveRunbook returned id=0")
+	}
+
+	rbs, err := d.Runbooks()
+	if err != nil {
+		t.Fatalf("Runbooks: %v", err)
+	}
+	if len(rbs) != 1 || rbs[0].Name != "update-nodes" {
+		t.Fatalf("Runbooks: %+v", rbs)
+	}
+
+	// Update existing
+	rb.ID = id
+	rb.Name = "update-nodes-v2"
+	if _, err := d.SaveRunbook(rb); err != nil {
+		t.Fatalf("SaveRunbook update: %v", err)
+	}
+	rbs, _ = d.Runbooks()
+	if len(rbs) != 1 || rbs[0].Name != "update-nodes-v2" {
+		t.Fatalf("after update: %+v", rbs)
+	}
+
+	// Runs
+	runID, err := d.CreateRunbookRun(id)
+	if err != nil {
+		t.Fatalf("CreateRunbookRun: %v", err)
+	}
+	if err := d.UpdateRunbookRun(runID, "running", "started…"); err != nil {
+		t.Fatalf("UpdateRunbookRun running: %v", err)
+	}
+	if err := d.UpdateRunbookRun(runID, "done", "finished OK"); err != nil {
+		t.Fatalf("UpdateRunbookRun done: %v", err)
+	}
+
+	runs, err := d.RecentRunbookRuns(id, 10)
+	if err != nil {
+		t.Fatalf("RecentRunbookRuns: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("len(runs) = %d, want 1", len(runs))
+	}
+	if runs[0].Status != "done" || runs[0].Output != "finished OK" {
+		t.Errorf("run = %+v", runs[0])
+	}
+	if runs[0].DoneAt == nil {
+		t.Error("DoneAt = nil after status=done")
+	}
+
+	// Delete
+	if err := d.DeleteRunbook(id); err != nil {
+		t.Fatalf("DeleteRunbook: %v", err)
+	}
+	rbs, _ = d.Runbooks()
+	if len(rbs) != 0 {
+		t.Errorf("after delete: len(rbs) = %d, want 0", len(rbs))
+	}
+}
+
+// ── Alert route CRUD ──────────────────────────────────────────────────────────
+
+func TestAlertRouteCRUD(t *testing.T) {
+	d := openTestDB(t)
+
+	r := AlertRoute{Name: "pagerduty", Source: "prometheus", Severity: "critical", WebhookURL: "https://events.pagerduty.com/v2/enqueue", Enabled: true}
+	id, err := d.SaveAlertRoute(r)
+	if err != nil {
+		t.Fatalf("SaveAlertRoute: %v", err)
+	}
+
+	routes, err := d.AlertRoutes()
+	if err != nil {
+		t.Fatalf("AlertRoutes: %v", err)
+	}
+	if len(routes) != 1 || !routes[0].Enabled {
+		t.Fatalf("AlertRoutes: %+v", routes)
+	}
+	if routes[0].LastFired != nil {
+		t.Error("LastFired should be nil before Touch")
+	}
+
+	// Update
+	r.ID = id
+	r.Enabled = false
+	if _, err := d.SaveAlertRoute(r); err != nil {
+		t.Fatalf("SaveAlertRoute update: %v", err)
+	}
+	routes, _ = d.AlertRoutes()
+	if routes[0].Enabled {
+		t.Error("after update, Enabled = true, want false")
+	}
+
+	// Touch
+	if err := d.TouchAlertRoute(id); err != nil {
+		t.Fatalf("TouchAlertRoute: %v", err)
+	}
+	routes, _ = d.AlertRoutes()
+	if routes[0].LastFired == nil {
+		t.Error("LastFired = nil after Touch")
+	}
+
+	// Delete
+	if err := d.DeleteAlertRoute(id); err != nil {
+		t.Fatalf("DeleteAlertRoute: %v", err)
+	}
+	routes, _ = d.AlertRoutes()
+	if len(routes) != 0 {
+		t.Errorf("after delete: len(routes) = %d, want 0", len(routes))
+	}
+}
+
+// ── VM lifecycle policy CRUD ──────────────────────────────────────────────────
+
+func TestLifecyclePolicyCRUD(t *testing.T) {
+	d := openTestDB(t)
+
+	p := VMLifecyclePolicy{Name: "shutdown-idle", Tag: "dev", Action: "shutdown", IdleHours: 2, Enabled: true}
+	id, err := d.SaveLifecyclePolicy(p)
+	if err != nil {
+		t.Fatalf("SaveLifecyclePolicy: %v", err)
+	}
+
+	policies, err := d.LifecyclePolicies()
+	if err != nil {
+		t.Fatalf("LifecyclePolicies: %v", err)
+	}
+	if len(policies) != 1 {
+		t.Fatalf("len = %d, want 1", len(policies))
+	}
+	if policies[0].Name != "shutdown-idle" || policies[0].IdleHours != 2 || !policies[0].Enabled {
+		t.Errorf("policy: %+v", policies[0])
+	}
+	if policies[0].LastRun != nil {
+		t.Error("LastRun should be nil before Touch")
+	}
+
+	// Update
+	p.ID = id
+	p.IdleHours = 4
+	if _, err := d.SaveLifecyclePolicy(p); err != nil {
+		t.Fatalf("SaveLifecyclePolicy update: %v", err)
+	}
+	policies, _ = d.LifecyclePolicies()
+	if policies[0].IdleHours != 4 {
+		t.Errorf("IdleHours = %d, want 4", policies[0].IdleHours)
+	}
+
+	// Touch
+	if err := d.TouchLifecyclePolicy(id); err != nil {
+		t.Fatalf("TouchLifecyclePolicy: %v", err)
+	}
+	policies, _ = d.LifecyclePolicies()
+	if policies[0].LastRun == nil {
+		t.Error("LastRun = nil after Touch")
+	}
+
+	// Delete
+	if err := d.DeleteLifecyclePolicy(id); err != nil {
+		t.Fatalf("DeleteLifecyclePolicy: %v", err)
+	}
+	policies, _ = d.LifecyclePolicies()
+	if len(policies) != 0 {
+		t.Errorf("after delete: len = %d, want 0", len(policies))
+	}
+}
+
+// ── Scan results ──────────────────────────────────────────────────────────────
+
+func TestScanResultsCRUD(t *testing.T) {
+	d := openTestDB(t)
+
+	results := []ScanResult{
+		{Target: "10.0.0.5", Node: "pve-1", VMID: 101, ScanType: "port", CheckName: "open-22", Status: "warn", Severity: "low", Detail: "SSH open"},
+		{Target: "10.0.0.5", Node: "pve-1", VMID: 101, ScanType: "port", CheckName: "open-80", Status: "fail", Severity: "high", Detail: "HTTP open"},
+		{Target: "10.0.0.6", Node: "pve-1", VMID: 102, ScanType: "vm_firewall", CheckName: "fw-disabled", Status: "fail", Severity: "critical", Detail: "no firewall"},
+	}
+	if err := d.SaveScanResults(results); err != nil {
+		t.Fatalf("SaveScanResults: %v", err)
+	}
+
+	all, err := d.RecentScanResults(10)
+	if err != nil {
+		t.Fatalf("RecentScanResults: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("len(all) = %d, want 3", len(all))
+	}
+	// All 3 results returned
+	found := map[string]bool{}
+	for _, r := range all {
+		found[r.Severity] = true
+	}
+	for _, sev := range []string{"low", "high", "critical"} {
+		if !found[sev] {
+			t.Errorf("severity %q not found in results", sev)
+		}
+	}
+
+	// Filter by target
+	forTarget, err := d.ScanResultsForTarget("10.0.0.5", 10)
+	if err != nil {
+		t.Fatalf("ScanResultsForTarget: %v", err)
+	}
+	if len(forTarget) != 2 {
+		t.Fatalf("ScanResultsForTarget: len = %d, want 2", len(forTarget))
+	}
+
+	// Mark remediated
+	if err := d.MarkScanResultRemediated(all[0].ID); err != nil {
+		t.Fatalf("MarkScanResultRemediated: %v", err)
+	}
+	all2, _ := d.RecentScanResults(10)
+	remediated := false
+	for _, r := range all2 {
+		if r.ID == all[0].ID && r.Remediated {
+			remediated = true
+		}
+	}
+	if !remediated {
+		t.Error("MarkScanResultRemediated did not set Remediated=true")
+	}
+
+	// Clear
+	if err := d.ClearScanResults(); err != nil {
+		t.Fatalf("ClearScanResults: %v", err)
+	}
+	all, _ = d.RecentScanResults(10)
+	if len(all) != 0 {
+		t.Errorf("after clear: len = %d, want 0", len(all))
+	}
+}
