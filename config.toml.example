@@ -64,6 +64,7 @@ ci_ssh_key    = ""          # paste your public key here
 ci_ipconfig   = "ip=dhcp"
 nameserver    = "1.1.1.1"
 searchdomain  = ""          # inherits globals.domain if set
+backup_storage = ""         # Proxmox storage ID for listing backups in guest detail (e.g. "pbs", "local")
 
 # Matchbox PXE server — optional; enables the PXE screen for bare-metal provisioning
 # Run Matchbox as a Nomad job or Docker container: https://matchbox.psdn.io
@@ -114,6 +115,23 @@ token = ""  # API token from Technitium admin panel
 [stepca]
 url         = "https://ca.yourdomain.com:8443"
 fingerprint = ""  # SHA-256 fingerprint of the root cert (from `step ca fingerprint`)
+
+# Home Assistant — optional; enables the Home Assistant tab in the Services screen
+# and exposes HA entities/services via the MCP server (for Hermes).
+# Long-lived token: HA UI → Profile → Long-lived access tokens → Create token
+# Env vars: none (set in config or Keychain via Keys screen, key: homeassistant_token)
+[homeassistant]
+url      = "http://homeassistant.local:8123"
+token    = ""      # store in Keychain via Keys screen
+insecure = false
+
+# Loki — optional; enables the Loki tab in the Metrics screen for log browsing
+# LogQL queries: https://grafana.com/docs/loki/latest/query/
+# Env vars: none (set in config or Keychain)
+[loki]
+url      = "http://loki.yourdomain.com:3100"
+token    = ""       # Bearer token if Loki is behind an auth proxy; store in Keychain via Keys screen (key: loki_token)
+insecure = false
 
 # Prometheus / Metrics — optional
 # url    — Prometheus server to query in the Metrics screen (tab: Metrics)

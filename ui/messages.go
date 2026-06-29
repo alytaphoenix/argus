@@ -371,7 +371,6 @@ type alertFiredMsg struct {
 
 // Lifecycle messages
 type openLifecycleMsg    struct{}
-type openAnsibleMsg      struct{}
 type lifecycleRunDoneMsg struct {
 	applied int
 	err     error
@@ -390,3 +389,23 @@ type guestIPMsg struct {
 	err   error
 }
 type sshDoneMsg struct{ err error }
+
+// Snapshot messages
+type snapshotsLoadedMsg struct {
+	snaps []api.Snapshot
+	err   error
+}
+type snapshotCreatedMsg struct {
+	upid string
+	err  error
+}
+type snapshotDeletedMsg struct {
+	upid string
+	err  error
+}
+
+// Backup messages
+type backupsLoadedMsg struct {
+	entries []api.BackupEntry
+	err     error
+}

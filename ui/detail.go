@@ -20,28 +20,31 @@ type detailTab int
 const (
 	detailTabStatus detailTab = iota
 	detailTabLogs
+	detailTabSnapshots
+	detailTabBackups
 )
 
-// logMsg is sent to messages.go
 type logLinesMsg struct {
 	lines []string
 	err   error
 }
 
 type DetailModel struct {
-	client      *api.Client
-	saltClient  *api.SaltClient
-	guest       api.Guest
-	loading     bool
-	acting      bool
-	notice      string
-	err         error
-	width       int
-	height      int
-	spinner     spinner.Model
-	sshUser     string
-	sshPassword string
-	fetchingIP  bool
+	client        *api.Client
+	saltClient    *api.SaltClient
+	guest         api.Guest
+	backupStorage string
+	loading       bool
+	acting        bool // guest power actions (start/stop/reboot)
+	snapDeleting  bool // snapshot delete in progress
+	notice        string
+	err           error
+	width         int
+	height        int
+	spinner       spinner.Model
+	sshUser       string
+	sshPassword   string
+	fetchingIP    bool
 
 	// log tab
 	tab        detailTab
@@ -49,9 +52,20 @@ type DetailModel struct {
 	logLoading bool
 	logUnit    textinput.Model
 	logScroll  int
+
+	// snapshot tab
+	snaps       []api.Snapshot
+	snapLoading bool
+	snapCursor  int
+	snapInput   textinput.Model
+	snapCreating bool
+
+	// backup tab
+	backups     []api.BackupEntry
+	backupLoading bool
 }
 
-func NewDetailModel(client *api.Client, saltClient *api.SaltClient, guest api.Guest, sshUser, sshPassword string) DetailModel {
+func NewDetailModel(client *api.Client, saltClient *api.SaltClient, guest api.Guest, sshUser, sshPassword, backupStorage string) DetailModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 
@@ -59,15 +73,21 @@ func NewDetailModel(client *api.Client, saltClient *api.SaltClient, guest api.Gu
 	logUnitTI.Placeholder = "unit name (blank = all)"
 	logUnitTI.CharLimit = 64
 
+	snapTI := textinput.New()
+	snapTI.Placeholder = "snapshot name (a-z, 0-9, -)"
+	snapTI.CharLimit = 40
+
 	return DetailModel{
-		client:      client,
-		saltClient:  saltClient,
-		guest:       guest,
-		loading:     true,
-		spinner:     s,
-		sshUser:     sshUser,
-		sshPassword: sshPassword,
-		logUnit:     logUnitTI,
+		client:        client,
+		saltClient:    saltClient,
+		guest:         guest,
+		backupStorage: backupStorage,
+		loading:       true,
+		spinner:       s,
+		sshUser:       sshUser,
+		sshPassword:   sshPassword,
+		logUnit:       logUnitTI,
+		snapInput:     snapTI,
 	}
 }
 
@@ -123,6 +143,51 @@ func (m DetailModel) fetchIP() tea.Cmd {
 		defer cancel()
 		ip := client.GuestPrimaryIP(ctx, g.Node, g.Type, g.VMID)
 		return guestIPMsg{guest: g, ip: ip}
+	}
+}
+
+func (m DetailModel) fetchSnapshotsCmd() tea.Cmd {
+	g := m.guest
+	client := m.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		snaps, err := client.Snapshots(ctx, g.Node, g.Type, g.VMID)
+		return snapshotsLoadedMsg{snaps: snaps, err: err}
+	}
+}
+
+func (m DetailModel) createSnapshotCmd(name string) tea.Cmd {
+	g := m.guest
+	client := m.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		upid, err := client.CreateSnapshot(ctx, g.Node, g.Type, g.VMID, name, "")
+		return snapshotCreatedMsg{upid: upid, err: err}
+	}
+}
+
+func (m DetailModel) deleteSnapshotCmd(snapname string) tea.Cmd {
+	g := m.guest
+	client := m.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		upid, err := client.DeleteSnapshot(ctx, g.Node, g.Type, g.VMID, snapname)
+		return snapshotDeletedMsg{upid: upid, err: err}
+	}
+}
+
+func (m DetailModel) fetchBackupsCmd() tea.Cmd {
+	g := m.guest
+	client := m.client
+	storage := m.backupStorage
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		entries, err := client.VMBackups(ctx, g.Node, storage, g.VMID)
+		return backupsLoadedMsg{entries: entries, err: err}
 	}
 }
 
@@ -187,12 +252,74 @@ func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case snapshotsLoadedMsg:
+		m.snapLoading = false
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.snaps = msg.snaps
+			m.snapCursor = 0
+		}
+		return m, nil
+
+	case snapshotCreatedMsg:
+		m.snapCreating = false
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.notice = "snapshot created"
+			m.snapLoading = true
+			return m, m.fetchSnapshotsCmd()
+		}
+		return m, nil
+
+	case snapshotDeletedMsg:
+		m.snapDeleting = false
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.notice = "snapshot deleted"
+			m.snapLoading = true
+			return m, m.fetchSnapshotsCmd()
+		}
+		return m, nil
+
+	case backupsLoadedMsg:
+		m.backupLoading = false
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.backups = msg.entries
+		}
+		return m, nil
+
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 
 	case tea.KeyMsg:
+		// Snapshot name input intercepts keys
+		if m.tab == detailTabSnapshots && m.snapInput.Focused() {
+			switch msg.String() {
+			case "esc":
+				m.snapInput.Blur()
+				m.snapInput.SetValue("")
+			case "enter":
+				name := strings.TrimSpace(m.snapInput.Value())
+				if name != "" {
+					m.snapInput.Blur()
+					m.snapInput.SetValue("")
+					m.snapCreating = true
+					return m, m.createSnapshotCmd(name)
+				}
+			default:
+				var cmd tea.Cmd
+				m.snapInput, cmd = m.snapInput.Update(msg)
+				return m, cmd
+			}
+		}
+
 		// Log tab text input intercepts keys
 		if m.tab == detailTabLogs && m.logUnit.Focused() {
 			switch msg.String() {
@@ -215,9 +342,26 @@ func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 		case key.Matches(msg, keys.Back):
 			return m, func() tea.Msg { return backMsg{} }
 		case msg.String() == "L":
-			if m.tab == detailTabStatus {
+			switch m.tab {
+			case detailTabStatus:
 				m.tab = detailTabLogs
-			} else {
+			case detailTabLogs:
+				m.tab = detailTabSnapshots
+				if len(m.snaps) == 0 && !m.snapLoading {
+					m.snapLoading = true
+					return m, m.fetchSnapshotsCmd()
+				}
+			case detailTabSnapshots:
+				if m.backupStorage != "" {
+					m.tab = detailTabBackups
+					if len(m.backups) == 0 && !m.backupLoading {
+						m.backupLoading = true
+						return m, m.fetchBackupsCmd()
+					}
+				} else {
+					m.tab = detailTabStatus
+				}
+			case detailTabBackups:
 				m.tab = detailTabStatus
 			}
 		case m.tab == detailTabLogs && (msg.String() == "up" || msg.String() == "k"):
@@ -233,6 +377,30 @@ func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 		case m.tab == detailTabLogs && msg.String() == "R":
 			m.logLoading = true
 			return m, m.fetchLogsCmd()
+		case m.tab == detailTabSnapshots && msg.String() == "n":
+			m.snapInput.Focus()
+		case m.tab == detailTabSnapshots && msg.String() == "R":
+			m.snapLoading = true
+			return m, m.fetchSnapshotsCmd()
+		case m.tab == detailTabSnapshots && (msg.String() == "up" || msg.String() == "k"):
+			if m.snapCursor > 0 {
+				m.snapCursor--
+			}
+		case m.tab == detailTabSnapshots && (msg.String() == "down" || msg.String() == "j"):
+			if m.snapCursor < len(m.snaps)-1 {
+				m.snapCursor++
+			}
+		case m.tab == detailTabSnapshots && msg.String() == "d":
+			if len(m.snaps) > 0 {
+				snap := m.snaps[m.snapCursor]
+				m.snapDeleting = true
+				return m, m.deleteSnapshotCmd(snap.Name)
+			}
+		case m.tab == detailTabBackups && msg.String() == "R":
+			if m.backupStorage != "" {
+				m.backupLoading = true
+				return m, m.fetchBackupsCmd()
+			}
 		case key.Matches(msg, keys.Refresh):
 			m.loading = true
 			return m, m.fetchStatus()
@@ -331,20 +499,32 @@ func (m DetailModel) View() string {
 		sb.WriteString(styleRunning.Render("  ✓ "+m.notice) + "\n\n")
 	}
 
-	if m.tab == detailTabLogs {
+	switch m.tab {
+	case detailTabLogs:
 		sb.WriteString(m.viewLogs())
+	case detailTabSnapshots:
+		sb.WriteString(m.viewSnapshots())
+	case detailTabBackups:
+		sb.WriteString(m.viewBackups())
 	}
 
 	sb.WriteString(styleDim.Render("  "+strings.Repeat("─", max(m.width-4, 40))) + "\n")
-	help := detailHelpStr()
-	if m.tab == detailTabLogs {
-		help = styleHelp.Render("↑/↓ scroll  f filter unit  R refresh  L back to status  b back  q quit")
-	} else {
-		help += styleHelp.Render("  L logs")
-	}
-	sb.WriteString("  " + help + "\n")
+	sb.WriteString("  " + m.tabHelp() + "\n")
 
 	return sb.String()
+}
+
+func (m DetailModel) tabHelp() string {
+	switch m.tab {
+	case detailTabLogs:
+		return styleHelp.Render("↑/↓ scroll  f filter unit  R refresh  L next tab  b back  q quit")
+	case detailTabSnapshots:
+		return styleHelp.Render("↑/↓ select  n new snapshot  d delete  R refresh  L next tab  b back  q quit")
+	case detailTabBackups:
+		return styleHelp.Render("R refresh  L next tab  b back  q quit")
+	default:
+		return detailHelpStr() + styleHelp.Render("  L logs/snaps")
+	}
 }
 
 func (m DetailModel) viewLogs() string {
@@ -381,5 +561,78 @@ func (m DetailModel) viewLogs() string {
 		sb.WriteString("  " + truncate(l, m.width-4) + "\n")
 	}
 	sb.WriteString(styleDim.Render(fmt.Sprintf("\n  line %d/%d", start+1, len(m.logLines))) + "\n")
+	return sb.String()
+}
+
+func (m DetailModel) viewSnapshots() string {
+	var sb strings.Builder
+	sb.WriteString("\n" + styleBold.Render("  Snapshots") + "\n\n")
+
+	if m.snapCreating || m.snapDeleting {
+		sb.WriteString("  " + m.spinner.View() + " working…\n")
+		return sb.String()
+	}
+
+	if m.snapInput.Focused() {
+		sb.WriteString("  New snapshot name: " + m.snapInput.View() + "\n")
+		sb.WriteString(styleDim.Render("  enter to create, esc to cancel") + "\n")
+		return sb.String()
+	}
+
+	if m.snapLoading {
+		sb.WriteString("  " + m.spinner.View() + " loading snapshots…\n")
+		return sb.String()
+	}
+
+	if len(m.snaps) == 0 {
+		sb.WriteString(styleDim.Render("  No snapshots. Press n to create one.\n"))
+		return sb.String()
+	}
+
+	for i, s := range m.snaps {
+		prefix := "  "
+		if i == m.snapCursor {
+			prefix = styleBold.Render("▸ ")
+		}
+		ts := time.Unix(s.Snaptime, 0).Format("2006-01-02 15:04")
+		desc := s.Description
+		if desc == "" {
+			desc = styleDim.Render("(no description)")
+		}
+		sb.WriteString(fmt.Sprintf("%s%-20s  %s  %s\n", prefix, s.Name, ts, desc))
+	}
+	return sb.String()
+}
+
+func (m DetailModel) viewBackups() string {
+	var sb strings.Builder
+	sb.WriteString("\n" + styleBold.Render("  Backups") + " " + styleDim.Render("("+m.backupStorage+")") + "\n\n")
+
+	if m.backupLoading {
+		sb.WriteString("  " + m.spinner.View() + " loading backups…\n")
+		return sb.String()
+	}
+	if m.backupStorage == "" {
+		sb.WriteString(styleDim.Render("  backup_storage not configured. Set [defaults] backup_storage in config.\n"))
+		return sb.String()
+	}
+	if len(m.backups) == 0 {
+		sb.WriteString(styleDim.Render("  No backups found in storage '" + m.backupStorage + "'.\n"))
+		return sb.String()
+	}
+
+	for _, b := range m.backups {
+		ts := time.Unix(b.CTime, 0).Format("2006-01-02 15:04")
+		size := fmtBytes(b.Size)
+		notes := b.Notes
+		if notes == "" {
+			notes = styleDim.Render("(no notes)")
+		}
+		volid := b.VolID
+		if idx := strings.LastIndex(volid, "/"); idx >= 0 {
+			volid = volid[idx+1:]
+		}
+		sb.WriteString(fmt.Sprintf("  %-40s  %s  %s  %s\n", truncate(volid, 40), ts, size, notes))
+	}
 	return sb.String()
 }

@@ -26,7 +26,10 @@ const (
 	metricsTabSalt                          // ratataskr DB + Prometheus
 	metricsTabAlerts                        // Prometheus alerting rules
 	metricsTabScrapeConfig                  // generated YAML
+	metricsTabLoki                          // Grafana Loki log browser
 )
+
+const metricsTabCount = int(metricsTabLoki) + 1
 
 // promQueryDef is a named PromQL expression shown in a Prometheus panel.
 type promQueryDef struct {
@@ -76,10 +79,17 @@ type metricsAlertsLoadedMsg struct {
 	err   error
 }
 
+// lokiLoadedMsg carries Loki log results.
+type lokiLoadedMsg struct {
+	entries []api.LokiEntry
+	err     error
+}
+
 // MetricsModel is the TUI screen for metrics.
 type MetricsModel struct {
 	db         *db.DB
 	promClient *api.PrometheusClient
+	lokiClient *api.LokiClient
 	cfg        config.Config
 
 	tab      metricsTab
@@ -108,12 +118,20 @@ type MetricsModel struct {
 	// Scroll offset for scrape config tab
 	scrapeScroll int
 
+	// Loki log browser
+	lokiInput   textinput.Model
+	lokiActive  bool // true = text input has focus
+	lokiEntries []api.LokiEntry
+	lokiErr     error
+	lokiLoading bool
+	lokiScroll  int
+
 	spinner spinner.Model
 	width   int
 	height  int
 }
 
-func NewMetricsModel(database *db.DB, promClient *api.PrometheusClient, cfg config.Config) MetricsModel {
+func NewMetricsModel(database *db.DB, promClient *api.PrometheusClient, lokiClient *api.LokiClient, cfg config.Config) MetricsModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 
@@ -121,12 +139,18 @@ func NewMetricsModel(database *db.DB, promClient *api.PrometheusClient, cfg conf
 	ti.Placeholder = "PromQL expression"
 	ti.CharLimit = 512
 
+	lokiTI := textinput.New()
+	lokiTI.Placeholder = `{job="myapp"} |= "error"`
+	lokiTI.CharLimit = 512
+
 	m := MetricsModel{
 		db:           database,
 		promClient:   promClient,
+		lokiClient:   lokiClient,
 		cfg:          cfg,
 		spinner:      s,
 		customInput:  ti,
+		lokiInput:    lokiTI,
 		panels:       make(map[metricsTab][]promPanelResult),
 		loading:      make(map[metricsTab]bool),
 		scrapeConfig: generateScrapeConfigUI(cfg),
@@ -186,6 +210,22 @@ func (m MetricsModel) loadProm(tab metricsTab) tea.Cmd {
 	}
 }
 
+// runLokiQuery queries Loki for the last hour of logs matching the given LogQL expression.
+func (m MetricsModel) runLokiQuery(expr string) tea.Cmd {
+	client := m.lokiClient
+	return func() tea.Msg {
+		if client == nil {
+			return lokiLoadedMsg{err: fmt.Errorf("Loki not configured")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		end := time.Now()
+		start := end.Add(-1 * time.Hour)
+		entries, err := client.QueryRange(ctx, expr, start, end, 200)
+		return lokiLoadedMsg{entries: entries, err: err}
+	}
+}
+
 // runCustomQuery sends a one-off PromQL query.
 func (m MetricsModel) runCustomQuery(expr string) tea.Cmd {
 	client := m.promClient
@@ -210,6 +250,33 @@ func queriesForTab(tab metricsTab) []promQueryDef {
 }
 
 func (m MetricsModel) Update(msg tea.Msg) (MetricsModel, tea.Cmd) {
+	// Loki query input intercept
+	if m.lokiActive {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "esc":
+				m.lokiActive = false
+				m.lokiInput.Blur()
+				return m, nil
+			case "enter":
+				expr := strings.TrimSpace(m.lokiInput.Value())
+				m.lokiActive = false
+				m.lokiInput.Blur()
+				if expr != "" {
+					m.lokiLoading = true
+					m.lokiEntries = nil
+					m.lokiErr = nil
+					return m, m.runLokiQuery(expr)
+				}
+				return m, nil
+			}
+		}
+		var cmd tea.Cmd
+		m.lokiInput, cmd = m.lokiInput.Update(msg)
+		return m, cmd
+	}
+
 	// Custom query input
 	if m.customActive {
 		switch msg := msg.(type) {
@@ -246,6 +313,15 @@ func (m MetricsModel) Update(msg tea.Msg) (MetricsModel, tea.Cmd) {
 		m.alertRulesErr = msg.err
 		if msg.err == nil {
 			m.alertRules = msg.rules
+		}
+		return m, nil
+
+	case lokiLoadedMsg:
+		m.lokiLoading = false
+		m.lokiErr = msg.err
+		if msg.err == nil {
+			m.lokiEntries = msg.entries
+			m.lokiScroll = 0
 		}
 		return m, nil
 
@@ -298,15 +374,25 @@ func (m MetricsModel) Update(msg tea.Msg) (MetricsModel, tea.Cmd) {
 		case "esc", "b":
 			return m, func() tea.Msg { return backMsg{} }
 		case "tab":
-			m.tab = (m.tab + 1) % 6
+			m.tab = (m.tab + 1) % metricsTab(metricsTabCount)
 			return m, m.enterTab(m.tab)
 		case "shift+tab":
-			m.tab = (m.tab + 5) % 6
+			m.tab = (m.tab + metricsTab(metricsTabCount-1)) % metricsTab(metricsTabCount)
 			return m, m.enterTab(m.tab)
 		case "R":
-			m.dbLoaded = false
-			m.loading[m.tab] = true
-			return m, tea.Batch(m.loadDB(), m.loadProm(m.tab))
+			if m.tab == metricsTabLoki {
+				expr := strings.TrimSpace(m.lokiInput.Value())
+				if expr != "" {
+					m.lokiLoading = true
+					m.lokiEntries = nil
+					m.lokiErr = nil
+					return m, m.runLokiQuery(expr)
+				}
+			} else {
+				m.dbLoaded = false
+				m.loading[m.tab] = true
+				return m, tea.Batch(m.loadDB(), m.loadProm(m.tab))
+			}
 		case "c", "C":
 			if m.promClient != nil && m.tab != metricsTabScrapeConfig && m.tab != metricsTabOverview {
 				m.customActive = true
@@ -318,9 +404,21 @@ func (m MetricsModel) Update(msg tea.Msg) (MetricsModel, tea.Cmd) {
 			if m.tab == metricsTabScrapeConfig && m.scrapeScroll > 0 {
 				m.scrapeScroll--
 			}
+			if m.tab == metricsTabLoki && m.lokiScroll > 0 {
+				m.lokiScroll--
+			}
 		case "down", "j":
 			if m.tab == metricsTabScrapeConfig {
 				m.scrapeScroll++
+			}
+			if m.tab == metricsTabLoki && m.lokiScroll < len(m.lokiEntries)-1 {
+				m.lokiScroll++
+			}
+		case "f":
+			if m.tab == metricsTabLoki {
+				m.lokiActive = true
+				m.lokiInput.Focus()
+				return m, textinput.Blink
 			}
 		}
 	}
@@ -342,7 +440,7 @@ func (m MetricsModel) loadAlertRules() tea.Cmd {
 
 // enterTab fires data loading when a tab is first visited.
 func (m *MetricsModel) enterTab(tab metricsTab) tea.Cmd {
-	if tab == metricsTabScrapeConfig || tab == metricsTabOverview {
+	if tab == metricsTabScrapeConfig || tab == metricsTabOverview || tab == metricsTabLoki {
 		return nil
 	}
 	if tab == metricsTabAlerts {
@@ -366,7 +464,7 @@ func (m MetricsModel) View() string {
 		styleBold.Render("metrics") + "\n\n")
 
 	// Tab bar
-	tabs := []string{"Overview", "Proxmox", "Nomad", "Salt", "Alerts", "Scrape Config"}
+	tabs := []string{"Overview", "Proxmox", "Nomad", "Salt", "Alerts", "Scrape Config", "Loki"}
 	for i, t := range tabs {
 		if metricsTab(i) == m.tab {
 			sb.WriteString(styleTabActive.Render("▸ " + t))
@@ -407,15 +505,21 @@ func (m MetricsModel) View() string {
 		sb.WriteString(m.alertsView())
 	case metricsTabScrapeConfig:
 		sb.WriteString(m.scrapeConfigView())
+	case metricsTabLoki:
+		sb.WriteString(m.lokiView())
 	}
 
 	sb.WriteString("\n")
 	helpLine := "  tab next  shift+tab prev  R refresh  b back  q quit"
-	if m.tab != metricsTabOverview && m.tab != metricsTabScrapeConfig && m.tab != metricsTabAlerts && m.promClient != nil {
-		helpLine = "  tab next  shift+tab prev  c custom query  R refresh  b back  q quit"
-	}
-	if m.tab == metricsTabScrapeConfig {
+	switch m.tab {
+	case metricsTabScrapeConfig:
 		helpLine = "  ↑/↓ scroll  tab next  b back  q quit"
+	case metricsTabLoki:
+		helpLine = "  f query  ↑/↓ scroll  R re-run  tab next  b back  q quit"
+	default:
+		if m.promClient != nil {
+			helpLine = "  tab next  shift+tab prev  c custom query  R refresh  b back  q quit"
+		}
 	}
 	sb.WriteString(styleHelp.Render(helpLine) + "\n")
 	return sb.String()
@@ -746,6 +850,53 @@ func (m MetricsModel) alertsView() string {
 		sb.WriteString(stylePaused.Render(fmt.Sprintf("%d pending", pending)))
 	}
 	sb.WriteString("\n")
+	return sb.String()
+}
+
+func (m MetricsModel) lokiView() string {
+	var sb strings.Builder
+	sb.WriteString(styleBold.Render("  Loki Log Browser") + "\n\n")
+
+	if m.lokiClient == nil {
+		sb.WriteString(styleDim.Render("  Loki not configured. Add [loki] url = \"http://loki:3100\" to config.toml.\n"))
+		return sb.String()
+	}
+
+	sb.WriteString(styleDim.Render("  Query (LogQL): ") + m.lokiInput.View() + "\n")
+	sb.WriteString(styleDim.Render("  f to edit query  R to re-run  ↑/↓ scroll") + "\n\n")
+
+	if m.lokiLoading {
+		sb.WriteString("  " + m.spinner.View() + " querying Loki…\n")
+		return sb.String()
+	}
+	if m.lokiErr != nil {
+		sb.WriteString(styleError.Render("  error: "+m.lokiErr.Error()) + "\n")
+		return sb.String()
+	}
+	if len(m.lokiEntries) == 0 {
+		sb.WriteString(styleDim.Render("  No results. Press f to enter a LogQL query, then enter to run.\n"))
+		return sb.String()
+	}
+
+	visible := m.height - 14
+	if visible < 5 {
+		visible = 5
+	}
+	start := m.lokiScroll
+	if start > len(m.lokiEntries)-1 {
+		start = len(m.lokiEntries) - 1
+	}
+	end := start + visible
+	if end > len(m.lokiEntries) {
+		end = len(m.lokiEntries)
+	}
+
+	for _, e := range m.lokiEntries[start:end] {
+		ts := e.Timestamp.Format("01-02 15:04:05")
+		line := truncate(e.Line, m.width-20)
+		sb.WriteString(fmt.Sprintf("  %s  %s\n", styleDim.Render(ts), line))
+	}
+	sb.WriteString(styleDim.Render(fmt.Sprintf("\n  %d/%d entries", start+1, len(m.lokiEntries))) + "\n")
 	return sb.String()
 }
 

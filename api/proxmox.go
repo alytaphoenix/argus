@@ -250,3 +250,71 @@ func (c *Client) NodeReboot(ctx context.Context, node string) error {
 	v.Set("command", "reboot")
 	return c.putForm(ctx, path, v)
 }
+
+// Snapshot is a VM/LXC snapshot entry.
+type Snapshot struct {
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	Snaptime    int64   `json:"snaptime"`
+	Parent      string  `json:"parent"`
+	VMState     float64 `json:"vmstate"` // 1 if RAM state was saved
+}
+
+// Snapshots returns all snapshots for a guest. "current" pseudo-snapshot is filtered out.
+func (c *Client) Snapshots(ctx context.Context, node, vmType string, vmid int) ([]Snapshot, error) {
+	path := fmt.Sprintf("/nodes/%s/%s/%d/snapshot", node, vmType, vmid)
+	var snaps []Snapshot
+	if err := c.get(ctx, path, &snaps); err != nil {
+		return nil, err
+	}
+	filtered := snaps[:0]
+	for _, s := range snaps {
+		if s.Name != "current" {
+			filtered = append(filtered, s)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].Snaptime > filtered[j].Snaptime
+	})
+	return filtered, nil
+}
+
+// CreateSnapshot creates a snapshot and returns the UPID for polling.
+func (c *Client) CreateSnapshot(ctx context.Context, node, vmType string, vmid int, name, desc string) (string, error) {
+	path := fmt.Sprintf("/nodes/%s/%s/%d/snapshot", node, vmType, vmid)
+	v := url.Values{}
+	v.Set("snapname", name)
+	if desc != "" {
+		v.Set("description", desc)
+	}
+	return c.postFormGetStr(ctx, path, v)
+}
+
+// DeleteSnapshot deletes a snapshot and returns the UPID for polling.
+func (c *Client) DeleteSnapshot(ctx context.Context, node, vmType string, vmid int, snapname string) (string, error) {
+	path := fmt.Sprintf("/nodes/%s/%s/%d/snapshot/%s", node, vmType, vmid, snapname)
+	return c.deleteGetStr(ctx, path)
+}
+
+// BackupEntry is a backup volume in Proxmox storage.
+type BackupEntry struct {
+	VolID  string `json:"volid"`
+	Size   int64  `json:"size"`
+	CTime  int64  `json:"ctime"`
+	Notes  string `json:"notes"`
+	Format string `json:"format"`
+}
+
+// VMBackups lists backup entries for a VM in the given storage.
+func (c *Client) VMBackups(ctx context.Context, node, storage string, vmid int) ([]BackupEntry, error) {
+	path := fmt.Sprintf("/nodes/%s/storage/%s/content?content=backup&vmid=%d", node, storage, vmid)
+	var entries []BackupEntry
+	if err := c.get(ctx, path, &entries); err != nil {
+		return nil, err
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].CTime > entries[j].CTime
+	})
+	return entries, nil
+}
+

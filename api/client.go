@@ -130,6 +130,56 @@ func (c *Client) postGetStr(ctx context.Context, path string) (string, error) {
 	return wrapper.Data, nil
 }
 
+// postFormGetStr sends a POST with form-encoded body and returns the response data field as a string (UPID).
+func (c *Client) postFormGetStr(ctx context.Context, path string, params url.Values) (string, error) {
+	body := strings.NewReader(params.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", c.authHeader())
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("HTTP %s", resp.Status)
+	}
+	var wrapper struct {
+		Data string `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+		return "", err
+	}
+	return wrapper.Data, nil
+}
+
+// deleteGetStr sends a DELETE request and returns the response data field as a string (UPID).
+func (c *Client) deleteGetStr(ctx context.Context, path string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.base+path, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", c.authHeader())
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("HTTP %s", resp.Status)
+	}
+	var wrapper struct {
+		Data string `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+		return "", err
+	}
+	return wrapper.Data, nil
+}
+
 // putForm sends a PUT request with form-encoded body (used for VM config updates).
 func (c *Client) putForm(ctx context.Context, path string, params url.Values) error {
 	body := strings.NewReader(params.Encode())

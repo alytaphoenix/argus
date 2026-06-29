@@ -116,6 +116,26 @@ func main() {
 		plexClient = api.NewPlexClient(cfg.Plex.URL, cfg.Plex.Token, cfg.Plex.Insecure)
 	}
 
+	if cfg.Loki.Token == "" {
+		if v, err := gkr.Load(gkr.KeyLokiToken); err == nil {
+			cfg.Loki.Token = v
+		}
+	}
+	var lokiClient *api.LokiClient
+	if cfg.Loki.URL != "" {
+		lokiClient = api.NewLokiClient(cfg.Loki.URL, cfg.Loki.Token, cfg.Loki.Insecure)
+	}
+
+	if cfg.HomeAssistant.Token == "" {
+		if v, err := gkr.Load(gkr.KeyHAToken); err == nil {
+			cfg.HomeAssistant.Token = v
+		}
+	}
+	var haClient *api.HAClient
+	if cfg.HomeAssistant.URL != "" {
+		haClient = api.NewHAClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, cfg.HomeAssistant.Insecure)
+	}
+
 	// cfg.Globals.SSHUser is always populated by ApplyGlobals (default "alyta").
 	// cfg.Defaults.SSHUser mirrors it unless explicitly set to something else.
 	sshUser := cfg.Globals.SSHUser
@@ -139,9 +159,9 @@ func main() {
 	}
 
 	p := tea.NewProgram(
-		ui.NewApp(proxmoxClient, saltClient, nomadClient, promClient,
+		ui.NewApp(proxmoxClient, saltClient, nomadClient, promClient, lokiClient,
 			dnsClient, caClient, claudeClient, matchboxClient, csClient, wazuhClient,
-			trueNASClient, plexClient,
+			trueNASClient, plexClient, haClient,
 			sshUser, sshPassword, cfg.Defaults, *cfg, database),
 		tea.WithAltScreen(),
 	)

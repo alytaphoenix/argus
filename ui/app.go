@@ -38,7 +38,6 @@ const (
 	screenRunbooks
 	screenAlertRoutes
 	screenLifecycle
-	screenAnsible
 )
 
 type App struct {
@@ -49,6 +48,7 @@ type App struct {
 	saltClient     *api.SaltClient
 	nomadClient    *api.NomadClient
 	promClient     *api.PrometheusClient
+	lokiClient     *api.LokiClient
 	dnsClient      *api.TechnitiumClient
 	caClient       *api.StepCAClient
 	claudeClient   *api.ClaudeClient
@@ -57,6 +57,7 @@ type App struct {
 	wazuhClient    *api.WazuhClient
 	trueNASClient  *api.TrueNASClient
 	plexClient     *api.PlexClient
+	haClient       *api.HAClient
 	database       *db.DB
 	sshUser        string
 	sshPassword    string
@@ -83,25 +84,29 @@ type App struct {
 	runbooks       RunbooksModel
 	alertRoutes    AlertRoutesModel
 	lifecycle      LifecycleModel
-	ansible        AnsibleModel
 	claudeOverlay  ClaudeOverlayModel
 	appSettings    db.AppSettings
 	// lightweight badge state for nodes screen
 	mediaBadgePlex     *bool   // nil=unchecked, true=online, false=offline
 	mediaBadgeServices []api.ServarrStatus
+	// alert route delivery: track last-seen counts to detect new events
+	lastCSBanCount     int // -1 = not yet loaded
+	lastWazuhHighCount int // -1 = not yet loaded
 }
 
 func NewApp(client *api.Client, saltClient *api.SaltClient, nomadClient *api.NomadClient,
-	promClient *api.PrometheusClient, dnsClient *api.TechnitiumClient, caClient *api.StepCAClient,
+	promClient *api.PrometheusClient, lokiClient *api.LokiClient,
+	dnsClient *api.TechnitiumClient, caClient *api.StepCAClient,
 	claudeClient *api.ClaudeClient, matchboxClient *api.MatchboxClient,
 	csClient *api.CrowdSecClient, wazuhClient *api.WazuhClient,
-	trueNASClient *api.TrueNASClient, plexClient *api.PlexClient,
+	trueNASClient *api.TrueNASClient, plexClient *api.PlexClient, haClient *api.HAClient,
 	sshUser, sshPassword string, defaults config.DefaultsConfig, cfg config.Config, database *db.DB) App {
 	a := App{
 		client:         client,
 		saltClient:     saltClient,
 		nomadClient:    nomadClient,
 		promClient:     promClient,
+		lokiClient:     lokiClient,
 		dnsClient:      dnsClient,
 		caClient:       caClient,
 		claudeClient:   claudeClient,
@@ -110,12 +115,15 @@ func NewApp(client *api.Client, saltClient *api.SaltClient, nomadClient *api.Nom
 		wazuhClient:    wazuhClient,
 		trueNASClient:  trueNASClient,
 		plexClient:     plexClient,
-		database:       database,
-		sshUser:        sshUser,
-		sshPassword:    sshPassword,
-		defaults:       defaults,
-		cfg:            cfg,
-		nodes:         NewNodesModel(client, saltClient != nil, nomadClient != nil, database),
+		haClient:       haClient,
+		database:           database,
+		sshUser:            sshUser,
+		sshPassword:        sshPassword,
+		defaults:           defaults,
+		cfg:                cfg,
+		lastCSBanCount:     -1,
+		lastWazuhHighCount: -1,
+		nodes:              NewNodesModel(client, saltClient != nil, nomadClient != nil, database),
 		claudeOverlay: NewClaudeOverlay(claudeClient),
 	}
 	a.loadAppSettings()
@@ -188,7 +196,6 @@ func (a App) sectionRoots() []screenID {
 	roots = append(roots, screenRunbooks)
 	roots = append(roots, screenAlertRoutes)
 	roots = append(roots, screenLifecycle)
-	roots = append(roots, screenAnsible)
 	roots = append(roots, screenSettings)
 	roots = append(roots, screenCredentials)
 	return roots
@@ -236,12 +243,12 @@ func (a App) switchSection(next screenID) (App, tea.Cmd) {
 		return a, a.profiles.Init()
 	case screenMetrics:
 		a.screen = screenMetrics
-		a.metrics = NewMetricsModel(a.database, a.promClient, a.cfg)
+		a.metrics = NewMetricsModel(a.database, a.promClient, a.lokiClient, a.cfg)
 		a.metrics.width, a.metrics.height = a.width, a.height
 		return a, a.metrics.Init()
 	case screenServices:
 		a.screen = screenServices
-		a.services = NewServicesModel(a.dnsClient, a.caClient, a.trueNASClient, a.database, a.cfg, a.appSettings, a.saltClient)
+		a.services = NewServicesModel(a.dnsClient, a.caClient, a.trueNASClient, a.haClient, a.database, a.cfg, a.appSettings, a.saltClient)
 		a.services.width, a.services.height = a.width, a.height
 		return a, a.services.Init()
 	case screenPXE:
@@ -284,11 +291,6 @@ func (a App) switchSection(next screenID) (App, tea.Cmd) {
 		a.lifecycle = NewLifecycleModel(a.database, a.client)
 		a.lifecycle.width, a.lifecycle.height = a.width, a.height
 		return a, a.lifecycle.Init()
-	case screenAnsible:
-		a.screen = screenAnsible
-		a.ansible = NewAnsibleModel(api.NewAnsibleRunner("", ""))
-		a.ansible.width, a.ansible.height = a.width, a.height
-		return a, a.ansible.Init()
 	case screenNodes:
 		a.screen = screenNodes
 		a.nodes = NewNodesModel(a.client, a.saltClient != nil, a.nomadClient != nil, a.database)
@@ -323,7 +325,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.runbooks.width, a.runbooks.height = msg.Width, msg.Height
 		a.alertRoutes.width, a.alertRoutes.height = msg.Width, msg.Height
 		a.lifecycle.width, a.lifecycle.height = msg.Width, msg.Height
-		a.ansible.width, a.ansible.height = msg.Width, msg.Height
 		a.claudeOverlay.width, a.claudeOverlay.height = msg.Width, msg.Height
 		return a, nil
 
@@ -335,7 +336,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case guestSelectedMsg:
 		a.screen = screenDetail
-		a.detail = NewDetailModel(a.client, a.saltClient, msg.guest, a.sshUser, a.sshPassword)
+		a.detail = NewDetailModel(a.client, a.saltClient, msg.guest, a.sshUser, a.sshPassword, a.defaults.BackupStorage)
 		a.detail.width, a.detail.height = a.width, a.height
 		return a, a.detail.Init()
 
@@ -399,8 +400,47 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openLifecycleMsg:
 		return a.switchSection(screenLifecycle)
 
-	case openAnsibleMsg:
-		return a.switchSection(screenAnsible)
+	case crowdSecLoadedMsg:
+		var secCmd tea.Cmd
+		a.security, secCmd = a.security.Update(msg)
+		if msg.err == nil {
+			banCount := 0
+			for _, d := range msg.decisions {
+				if d.Type == "ban" {
+					banCount++
+				}
+			}
+			if a.lastCSBanCount >= 0 && banCount > a.lastCSBanCount {
+				fireCmd := a.alertRoutes.FireMatchingRoutes("crowdsec", "high")
+				a.lastCSBanCount = banCount
+				return a, tea.Batch(secCmd, fireCmd)
+			}
+			a.lastCSBanCount = banCount
+		}
+		return a, secCmd
+
+	case wazuhLoadedMsg:
+		var secCmd tea.Cmd
+		a.security, secCmd = a.security.Update(msg)
+		if msg.err == nil {
+			highCount := 0
+			sev := "high"
+			for _, al := range msg.alerts {
+				if al.Rule.Level >= a.appSettings.WazuhHighLevel {
+					highCount++
+				}
+				if al.Rule.Level >= a.appSettings.WazuhCriticalLevel {
+					sev = "critical"
+				}
+			}
+			if a.lastWazuhHighCount >= 0 && highCount > a.lastWazuhHighCount {
+				fireCmd := a.alertRoutes.FireMatchingRoutes("wazuh", sev)
+				a.lastWazuhHighCount = highCount
+				return a, tea.Batch(secCmd, fireCmd)
+			}
+			a.lastWazuhHighCount = highCount
+		}
+		return a, secCmd
 
 	case claudeOverlayMsg:
 		a.claudeOverlay = a.claudeOverlay.Open(a.currentContext())
@@ -433,7 +473,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch a.screen {
 		case screenGuests, screenSalt, screenNomad, screenCredentials, screenProfiles,
 			screenMetrics, screenServices, screenPXE, screenSecurity, screenSettings,
-			screenMaintenance, screenPlex, screenRunbooks, screenAlertRoutes, screenLifecycle, screenAnsible:
+			screenMaintenance, screenPlex, screenRunbooks, screenAlertRoutes, screenLifecycle:
 			a.screen = screenNodes
 		case screenResize:
 			a.screen = screenGuests
@@ -537,8 +577,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.alertRoutes, cmd = a.alertRoutes.Update(msg)
 	case screenLifecycle:
 		a.lifecycle, cmd = a.lifecycle.Update(msg)
-	case screenAnsible:
-		a.ansible, cmd = a.ansible.Update(msg)
 	}
 
 	// Claude overlay receives updates regardless of screen if visible
@@ -575,7 +613,6 @@ func (a App) tabBar() string {
 	entries = append(entries, tabEntry{"Runbooks", screenRunbooks})
 	entries = append(entries, tabEntry{"Alerts", screenAlertRoutes})
 	entries = append(entries, tabEntry{"Lifecycle", screenLifecycle})
-	entries = append(entries, tabEntry{"Ansible", screenAnsible})
 	entries = append(entries, tabEntry{"Settings", screenSettings})
 	entries = append(entries, tabEntry{"Keys", screenCredentials})
 
@@ -639,8 +676,6 @@ func (a App) View() string {
 		content = a.alertRoutes.View()
 	case screenLifecycle:
 		content = a.lifecycle.View()
-	case screenAnsible:
-		content = a.ansible.View()
 	}
 
 	view := a.tabBar() + content

@@ -27,6 +27,8 @@ type Config struct {
 	Wazuh      WazuhConfig      `toml:"wazuh"`
 	Plex       PlexConfig       `toml:"plex"`
 	Servarr    ServarrConfigs   `toml:"servarr"`
+	Loki          LokiConfig          `toml:"loki"`
+	HomeAssistant HomeAssistantConfig `toml:"homeassistant"`
 }
 
 // PlexConfig configures the Plex Media Server integration.
@@ -126,6 +128,20 @@ type StepCAConfig struct {
 	Fingerprint string `toml:"fingerprint"` // root cert fingerprint for verification
 }
 
+// HomeAssistantConfig configures the Home Assistant integration.
+type HomeAssistantConfig struct {
+	URL      string `toml:"url"`      // e.g. http://homeassistant.local:8123
+	Token    string `toml:"token"`    // Long-lived access token
+	Insecure bool   `toml:"insecure"` // skip TLS verify for self-signed certs
+}
+
+// LokiConfig configures optional Grafana Loki log browsing in the Metrics screen.
+type LokiConfig struct {
+	URL      string `toml:"url"`      // e.g. http://loki:3100
+	Token    string `toml:"token"`    // Bearer token (leave empty if auth disabled)
+	Insecure bool   `toml:"insecure"` // skip TLS verify for self-signed certs
+}
+
 // PrometheusConfig configures optional Prometheus integration.
 type PrometheusConfig struct {
 	// URL is the Prometheus server to query (e.g. http://localhost:9090).
@@ -146,12 +162,13 @@ type DefaultsConfig struct {
 	Storage      string `toml:"storage"`
 	Bridge       string `toml:"bridge"`
 	OSType       string `toml:"ostype"`
-	SSHUser      string `toml:"ssh_user"`
-	CIUser       string `toml:"ci_user"`
-	CISSHKey     string `toml:"ci_ssh_key"`
-	CIIPConfig   string `toml:"ci_ipconfig"`
-	Nameserver   string `toml:"nameserver"`
-	SearchDomain string `toml:"searchdomain"`
+	SSHUser       string `toml:"ssh_user"`
+	CIUser        string `toml:"ci_user"`
+	CISSHKey      string `toml:"ci_ssh_key"`
+	CIIPConfig    string `toml:"ci_ipconfig"`
+	Nameserver    string `toml:"nameserver"`
+	SearchDomain  string `toml:"searchdomain"`
+	BackupStorage string `toml:"backup_storage"` // Proxmox storage ID for backup listing, e.g. "pbs"
 }
 
 type NomadConfig struct {

@@ -18,6 +18,8 @@ const (
 	KeyAnthropicAPIKey = "anthropic_api_key"
 	KeyTrueNASAPIKey   = "truenas_api_key"
 	KeyPlexToken       = "plex_token"
+	KeyHAToken         = "homeassistant_token"
+	KeyLokiToken       = "loki_token"
 )
 
 // SSHNodeKey returns the keyring key for a per-node SSH password.
