@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -242,15 +243,5 @@ func (c *PrometheusClient) get(ctx context.Context, path string) ([]byte, error)
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("HTTP %s", resp.Status)
 	}
-	var buf []byte
-	buf = make([]byte, 0, 4096)
-	tmp := make([]byte, 4096)
-	for {
-		n, err := resp.Body.Read(tmp)
-		buf = append(buf, tmp[:n]...)
-		if err != nil {
-			break
-		}
-	}
-	return buf, nil
+	return io.ReadAll(resp.Body)
 }

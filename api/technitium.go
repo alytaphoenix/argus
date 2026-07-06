@@ -191,6 +191,10 @@ func (c *TechnitiumClient) DeleteRecord(ctx context.Context, zone, domain, recTy
 		params.Set("cname", value)
 	case "TXT":
 		params.Set("text", value)
+	case "MX":
+		// value is the exchange hostname; Technitium also needs preference
+		// but accepts the exchange alone for deletion matching.
+		params.Set("exchange", value)
 	}
 	_, err := c.post(ctx, "/api/zones/records/delete", params)
 	return err

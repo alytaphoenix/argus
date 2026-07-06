@@ -485,8 +485,20 @@ CREATE INDEX IF NOT EXISTS idx_maint_steps_run ON maintenance_run_steps(run_id);
 	}
 
 	// v16 — rebuild certificates table with UNIQUE(host, port) so fingerprint
-	// format changes across upgrades don't cause duplicate rows.
-	if _, err := d.sql.Exec(`
+	// format changes across upgrades don't cause duplicate rows. Guarded by
+	// PRAGMA user_version and wrapped in a transaction: the rebuild drops and
+	// renames tables, so it must run exactly once and never partially.
+	var schemaVersion int
+	if err := d.sql.QueryRow(`PRAGMA user_version`).Scan(&schemaVersion); err != nil {
+		return err
+	}
+	if schemaVersion < 16 {
+		tx, err := d.sql.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback() //nolint:errcheck
+		if _, err := tx.Exec(`
 CREATE TABLE IF NOT EXISTS certificates_new (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     host         TEXT NOT NULL,
@@ -511,8 +523,13 @@ INSERT OR REPLACE INTO certificates_new
 DROP TABLE IF EXISTS certificates;
 ALTER TABLE certificates_new RENAME TO certificates;
 CREATE INDEX IF NOT EXISTS idx_certs_expiry ON certificates(not_after);
+PRAGMA user_version = 16;
 `); err != nil {
-		return err
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -530,13 +547,14 @@ type AppSetting struct {
 
 // AppSettings is a parsed view of the most-used settings, ready for use in commands.
 type AppSettings struct {
-	WazuhCriticalLevel  int
-	WazuhHighLevel      int
-	WazuhMediumLevel    int
-	ScanTimeoutMs       int
-	ScanExtraPorts      string // comma-separated extra ports, empty = none
-	BanLookbackHours    int
-	HealthCheckTimeoutS int
+	WazuhCriticalLevel     int
+	WazuhHighLevel         int
+	WazuhMediumLevel       int
+	ScanTimeoutMs          int
+	ScanExtraPorts         string // comma-separated extra ports, empty = none
+	BanLookbackHours       int
+	HealthCheckTimeoutS    int
+	MaintenanceRebootWaitS int
 }
 
 var defaultSettings = []struct {
@@ -549,6 +567,7 @@ var defaultSettings = []struct {
 	{"scan.extra_ports", "", "Additional ports to scan (comma-separated, e.g. 8080,8443)"},
 	{"services.ban_lookback_hours", "48", "Hours to look back when checking CrowdSec bans"},
 	{"services.healthcheck_timeout_s", "15", "HTTP/TCP health check timeout (seconds)"},
+	{"maintenance.reboot_wait_s", "30", "Seconds to wait after a node reboot before polling for it to come back"},
 }
 
 func (d *DB) seedDefaultSettings() error {
@@ -616,13 +635,14 @@ func (d *DB) LoadAppSettings() AppSettings {
 		return n
 	}
 	return AppSettings{
-		WazuhCriticalLevel:  parseIntOr("wazuh.critical_level", 12),
-		WazuhHighLevel:      parseIntOr("wazuh.high_level", 10),
-		WazuhMediumLevel:    parseIntOr("wazuh.medium_level", 7),
-		ScanTimeoutMs:       parseIntOr("scan.timeout_ms", 600),
-		ScanExtraPorts:      d.GetSetting("scan.extra_ports", ""),
-		BanLookbackHours:    parseIntOr("services.ban_lookback_hours", 48),
-		HealthCheckTimeoutS: parseIntOr("services.healthcheck_timeout_s", 15),
+		WazuhCriticalLevel:     parseIntOr("wazuh.critical_level", 12),
+		WazuhHighLevel:         parseIntOr("wazuh.high_level", 10),
+		WazuhMediumLevel:       parseIntOr("wazuh.medium_level", 7),
+		ScanTimeoutMs:          parseIntOr("scan.timeout_ms", 600),
+		ScanExtraPorts:         d.GetSetting("scan.extra_ports", ""),
+		BanLookbackHours:       parseIntOr("services.ban_lookback_hours", 48),
+		HealthCheckTimeoutS:    parseIntOr("services.healthcheck_timeout_s", 15),
+		MaintenanceRebootWaitS: parseIntOr("maintenance.reboot_wait_s", 30),
 	}
 }
 
@@ -821,11 +841,13 @@ FROM provisioned_vms ORDER BY provisioned_at DESC`)
 	return out, rows.Err()
 }
 
-// UpdateVMStatus updates the cached status/IP for a provisioned VM.
+// UpdateVMStatus updates the cached status/IP for the most recently
+// provisioned row with this vmid (VMIDs can be reused across deletions).
 func (d *DB) UpdateVMStatus(vmid int, status, ip, vmType string) error {
 	now := time.Now()
 	_, err := d.sql.Exec(`
-UPDATE provisioned_vms SET last_status=?, vm_ip=?, vm_type=?, last_seen_at=? WHERE vmid=?`,
+UPDATE provisioned_vms SET last_status=?, vm_ip=?, vm_type=?, last_seen_at=?
+WHERE id = (SELECT id FROM provisioned_vms WHERE vmid=? ORDER BY provisioned_at DESC LIMIT 1)`,
 		status, ip, vmType, now, vmid)
 	return err
 }
@@ -2142,6 +2164,57 @@ FROM maintenance_schedules ORDER BY created_at DESC`)
 
 func (d *DB) DeleteMaintenanceSchedule(id int64) error {
 	_, err := d.sql.Exec(`DELETE FROM maintenance_schedules WHERE id=?`, id)
+	return err
+}
+
+// DueMaintenanceSchedules returns enabled schedules whose run_at has passed.
+func (d *DB) DueMaintenanceSchedules(now time.Time) ([]MaintenanceSchedule, error) {
+	rows, err := d.sql.Query(`
+SELECT id,name,run_at,repeat,node_order,task_flags,ha_aware,enabled,created_at,updated_at
+FROM maintenance_schedules
+WHERE enabled=1 AND run_at IS NOT NULL AND run_at <= ?
+ORDER BY run_at`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MaintenanceSchedule
+	for rows.Next() {
+		var s MaintenanceSchedule
+		var haAware, enabled int
+		if err := rows.Scan(&s.ID, &s.Name, &s.RunAt, &s.Repeat, &s.NodeOrder, &s.TaskFlags,
+			&haAware, &enabled, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		s.HAAware = haAware == 1
+		s.Enabled = enabled == 1
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// AdvanceMaintenanceSchedule moves a fired schedule to its next occurrence,
+// or disables it if it was a one-shot. Called before the run executes so a
+// crash or overlapping tick cannot fire the same schedule twice.
+func (d *DB) AdvanceMaintenanceSchedule(s MaintenanceSchedule, now time.Time) error {
+	if s.RunAt == nil {
+		return nil
+	}
+	next := *s.RunAt
+	switch s.Repeat {
+	case "weekly":
+		for !next.After(now) {
+			next = next.AddDate(0, 0, 7)
+		}
+	case "monthly":
+		for !next.After(now) {
+			next = next.AddDate(0, 1, 0)
+		}
+	default:
+		_, err := d.sql.Exec(`UPDATE maintenance_schedules SET enabled=0, updated_at=? WHERE id=?`, now, s.ID)
+		return err
+	}
+	_, err := d.sql.Exec(`UPDATE maintenance_schedules SET run_at=?, updated_at=? WHERE id=?`, next, now, s.ID)
 	return err
 }
 

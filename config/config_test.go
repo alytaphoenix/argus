@@ -157,9 +157,12 @@ func TestLoadFailsWithoutProxmoxHost(t *testing.T) {
 	)
 	defer cleanup()
 
-	_, err := Load()
-	if err == nil {
-		t.Error("expected error when PROXMOX_HOST is empty, got nil")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected Validate error when PROXMOX_HOST is empty, got nil")
 	}
 }
 
@@ -171,9 +174,12 @@ func TestLoadFailsWithoutCredentials(t *testing.T) {
 	)
 	defer cleanup()
 
-	_, err := Load()
-	if err == nil {
-		t.Error("expected error when token/secret are empty, got nil")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected Validate error when token/secret are empty, got nil")
 	}
 }
 

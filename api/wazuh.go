@@ -15,9 +15,6 @@ import (
 	"github.com/alytaphoenix/ratataskr/config"
 )
 
-func insecureTLS() *tls.Config {
-	return &tls.Config{InsecureSkipVerify: true} //nolint:gosec
-}
 
 // WazuhClient talks to the Wazuh REST API.
 // Docs: https://documentation.wazuh.com/current/user-manual/api/reference.html
@@ -35,14 +32,20 @@ func NewWazuhClient(cfg config.WazuhConfig) *WazuhClient {
 	if cfg.URL == "" {
 		return nil
 	}
+	// Wazuh ships with a self-signed cert, so skip verification unless the
+	// operator explicitly sets insecure = false.
+	insecure := true
+	if cfg.Insecure != nil {
+		insecure = *cfg.Insecure
+	}
 	return &WazuhClient{
 		base:     strings.TrimRight(cfg.URL, "/"),
 		username: cfg.Username,
 		password: cfg.Password,
 		http: &http.Client{
-			Timeout:   15 * time.Second,
+			Timeout: 15 * time.Second,
 			Transport: &http.Transport{
-				TLSClientConfig: insecureTLS(), // Wazuh uses self-signed certs by default
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure}, //nolint:gosec
 			},
 		},
 	}

@@ -241,163 +241,283 @@ func (m MaintenanceModel) saveScheduleCmd(runNow bool) tea.Cmd {
 }
 
 // executeRunCmd runs a maintenance run step-by-step in the background.
-// It sends maintStepDoneMsg after each step.
 func (m MaintenanceModel) executeRunCmd(runID int64, nodeOrder []string, taskFlags db.MaintenanceTaskFlags, haAware bool) tea.Cmd {
 	proxmox := m.proxmoxClient
 	salt := m.saltClient
 	database := m.database
-
 	return func() tea.Msg {
-		if database == nil {
-			return maintRunDoneMsg{runID: runID, err: fmt.Errorf("no database")}
-		}
-		if err := database.StartMaintenanceRun(runID); err != nil {
-			return maintRunDoneMsg{runID: runID, err: err}
-		}
+		return runMaintenance(proxmox, salt, database, runID, nodeOrder, taskFlags, haAware)
+	}
+}
 
-		// Build ordered step list
-		var steps []db.MaintenanceRunStep
-		for _, node := range nodeOrder {
-			if haAware {
-				steps = append(steps, db.MaintenanceRunStep{RunID: runID, Node: node, Task: "evacuate", Status: "pending"})
-			}
-			if taskFlags.OSUpdates || taskFlags.PkgUpdates {
-				steps = append(steps, db.MaintenanceRunStep{RunID: runID, Node: node, Task: "os_update", Status: "pending"})
-			}
-			if taskFlags.ProxmoxUpgrade {
-				steps = append(steps, db.MaintenanceRunStep{RunID: runID, Node: node, Task: "proxmox_upgrade", Status: "pending"})
-			}
-			if taskFlags.Reboot {
-				steps = append(steps, db.MaintenanceRunStep{RunID: runID, Node: node, Task: "reboot", Status: "pending"})
-			}
-			if haAware {
-				steps = append(steps, db.MaintenanceRunStep{RunID: runID, Node: node, Task: "unevacuate", Status: "pending"})
-			}
-		}
+// sleepCtx sleeps for d or until ctx is cancelled, whichever comes first.
+func sleepCtx(ctx context.Context, d time.Duration) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(d):
+	}
+}
 
-		if err := database.CreateMaintenanceSteps(runID, steps); err != nil {
-			now := time.Now()
-			_ = database.UpdateMaintenanceRunStatus(runID, "failed", &now)
-			return maintRunDoneMsg{runID: runID, err: err}
-		}
-
-		// Reload steps with IDs
-		steps, err := database.MaintenanceRunSteps(runID)
-		if err != nil {
-			return maintRunDoneMsg{runID: runID, err: err}
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
-		defer cancel()
-
-		for _, step := range steps {
-			_ = database.UpdateMaintenanceStep(step.ID, "running", "")
-
-			var output string
-			var stepErr error
-
-			switch step.Task {
-			case "evacuate":
-				if proxmox != nil {
-					ha, _ := proxmox.HAResources(ctx)
-					errs := proxmox.MigrateHAResourcesOffNode(ctx, step.Node, ha)
-					if len(errs) > 0 {
-						output = fmt.Sprintf("evacuate: %d migration(s) triggered; %d error(s)", len(ha), len(errs))
-					} else {
-						output = fmt.Sprintf("evacuated %d HA resources", len(ha))
-					}
-					// Wait briefly for migrations to settle
-					time.Sleep(10 * time.Second)
-				} else {
-					output = "skipped (no Proxmox client)"
+// waitForEvacuation polls HA resources until none remain on node (or timeout).
+func waitForEvacuation(ctx context.Context, proxmox *api.Client, node string, timeout time.Duration) (int, error) {
+	deadline := time.Now().Add(timeout)
+	remaining := 0
+	for {
+		ha, err := proxmox.HAResources(ctx)
+		if err == nil {
+			remaining = 0
+			for _, r := range ha {
+				if r.Node == node && r.State != "stopped" {
+					remaining++
 				}
+			}
+			if remaining == 0 {
+				return 0, nil
+			}
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return remaining, fmt.Errorf("%d HA resource(s) still on %s after %s", remaining, node, timeout)
+		}
+		sleepCtx(ctx, 10*time.Second)
+	}
+}
 
-			case "os_update":
-				// Try Salt first, fall back to Proxmox APT API
-				if salt != nil {
-					jid, err := salt.ApplyState(ctx, step.Node, "system.update")
-					if err != nil {
-						// Fall back to Proxmox APT
-						output = fmt.Sprintf("salt: %v; trying proxmox apt…", err)
-						if proxmox != nil {
-							upid, err := proxmox.NodeAPTUpdate(ctx, step.Node)
-							if err != nil {
-								stepErr = err
-								output += " apt failed: " + err.Error()
-							} else if upid != "" {
-								exit, _ := proxmox.WaitForTask(ctx, step.Node, upid)
-								output += fmt.Sprintf(" apt: %s", exit)
+// waitForSaltJob polls a Salt async job until it returns (or timeout).
+func waitForSaltJob(ctx context.Context, salt *api.SaltClient, jid string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		done, success, failed, err := salt.JobResult(ctx, jid)
+		if err == nil && done {
+			if !success {
+				return fmt.Errorf("failed states: %s", strings.Join(failed, ", "))
+			}
+			return nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return fmt.Errorf("job %s did not complete within %s", jid, timeout)
+		}
+		sleepCtx(ctx, 5*time.Second)
+	}
+}
+
+// waitForNodeOnline polls the cluster until node reports online status (or timeout).
+func waitForNodeOnline(ctx context.Context, proxmox *api.Client, node string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		nodes, err := proxmox.Nodes(ctx)
+		if err == nil {
+			for _, n := range nodes {
+				if n.Name == node && n.Status == "online" {
+					return nil
+				}
+			}
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return fmt.Errorf("node %s not back online within %s", node, timeout)
+		}
+		sleepCtx(ctx, 10*time.Second)
+	}
+}
+
+// runMaintenance executes a maintenance run synchronously. It is shared by the
+// Maintenance screen and the app-level scheduler. Steps wait for completion
+// before advancing: evacuation is polled until VMs have moved, Salt updates are
+// polled until the job returns, and reboots are polled until the node is back
+// online. A failed step skips the remaining steps for that node and marks the
+// whole run failed.
+func runMaintenance(proxmox *api.Client, salt *api.SaltClient, database *db.DB,
+	runID int64, nodeOrder []string, taskFlags db.MaintenanceTaskFlags, haAware bool) tea.Msg {
+
+	if database == nil {
+		return maintRunDoneMsg{runID: runID, err: fmt.Errorf("no database")}
+	}
+	if err := database.StartMaintenanceRun(runID); err != nil {
+		return maintRunDoneMsg{runID: runID, err: err}
+	}
+
+	rebootWait := time.Duration(database.LoadAppSettings().MaintenanceRebootWaitS) * time.Second
+	if rebootWait <= 0 {
+		rebootWait = 30 * time.Second
+	}
+
+	// Build ordered step list
+	var steps []db.MaintenanceRunStep
+	for _, node := range nodeOrder {
+		if haAware {
+			steps = append(steps, db.MaintenanceRunStep{RunID: runID, Node: node, Task: "evacuate", Status: "pending"})
+		}
+		if taskFlags.OSUpdates || taskFlags.PkgUpdates {
+			steps = append(steps, db.MaintenanceRunStep{RunID: runID, Node: node, Task: "os_update", Status: "pending"})
+		}
+		if taskFlags.ProxmoxUpgrade {
+			steps = append(steps, db.MaintenanceRunStep{RunID: runID, Node: node, Task: "proxmox_upgrade", Status: "pending"})
+		}
+		if taskFlags.Reboot {
+			steps = append(steps, db.MaintenanceRunStep{RunID: runID, Node: node, Task: "reboot", Status: "pending"})
+		}
+		if haAware {
+			steps = append(steps, db.MaintenanceRunStep{RunID: runID, Node: node, Task: "unevacuate", Status: "pending"})
+		}
+	}
+
+	if err := database.CreateMaintenanceSteps(runID, steps); err != nil {
+		now := time.Now()
+		_ = database.UpdateMaintenanceRunStatus(runID, "failed", &now)
+		return maintRunDoneMsg{runID: runID, err: err}
+	}
+
+	// Reload steps with IDs
+	steps, err := database.MaintenanceRunSteps(runID)
+	if err != nil {
+		return maintRunDoneMsg{runID: runID, err: err}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Hour)
+	defer cancel()
+
+	anyFailed := false
+	skipNode := "" // node whose remaining steps are skipped after a failure
+
+	for _, step := range steps {
+		if step.Node == skipNode {
+			_ = database.UpdateMaintenanceStep(step.ID, "skipped", "skipped after earlier failure on this node")
+			continue
+		}
+		skipNode = ""
+		_ = database.UpdateMaintenanceStep(step.ID, "running", "")
+
+		var output string
+		var stepErr error
+
+		switch step.Task {
+		case "evacuate":
+			if proxmox != nil {
+				ha, _ := proxmox.HAResources(ctx)
+				onNode := 0
+				for _, r := range ha {
+					if r.Node == step.Node {
+						onNode++
+					}
+				}
+				errs := proxmox.MigrateHAResourcesOffNode(ctx, step.Node, ha)
+				if len(errs) > 0 {
+					stepErr = fmt.Errorf("evacuate: %d migration error(s): %v", len(errs), errs[0])
+				} else if onNode > 0 {
+					if _, err := waitForEvacuation(ctx, proxmox, step.Node, 15*time.Minute); err != nil {
+						stepErr = err
+					} else {
+						output = fmt.Sprintf("evacuated %d HA resource(s)", onNode)
+					}
+				} else {
+					output = "no HA resources on node"
+				}
+			} else {
+				output = "skipped (no Proxmox client)"
+			}
+
+		case "os_update":
+			// Try Salt first, fall back to Proxmox APT API
+			if salt != nil {
+				jid, err := salt.ApplyState(ctx, step.Node, "system.update")
+				if err != nil {
+					// Fall back to Proxmox APT
+					output = fmt.Sprintf("salt: %v; trying proxmox apt…", err)
+					if proxmox != nil {
+						upid, err := proxmox.NodeAPTUpdate(ctx, step.Node)
+						if err != nil {
+							stepErr = err
+						} else if upid != "" {
+							exit, _ := proxmox.WaitForTask(ctx, step.Node, upid)
+							output += fmt.Sprintf(" apt: %s", exit)
+							if exit != "OK" {
+								stepErr = fmt.Errorf("apt task: %s", exit)
 							}
 						}
-					} else {
-						output = "salt state.apply: jid=" + jid
 					}
-				} else if proxmox != nil {
-					upid, err := proxmox.NodeAPTUpdate(ctx, step.Node)
-					if err != nil {
-						stepErr = err
-						output = "apt error: " + err.Error()
-					} else if upid != "" {
-						exit, _ := proxmox.WaitForTask(ctx, step.Node, upid)
-						output = "apt: " + exit
-					} else {
-						output = "apt update triggered"
+				} else if err := waitForSaltJob(ctx, salt, jid, 30*time.Minute); err != nil {
+					stepErr = fmt.Errorf("salt job %s: %w", jid, err)
+				} else {
+					output = "salt state.apply completed (jid=" + jid + ")"
+				}
+			} else if proxmox != nil {
+				upid, err := proxmox.NodeAPTUpdate(ctx, step.Node)
+				if err != nil {
+					stepErr = err
+				} else if upid != "" {
+					exit, _ := proxmox.WaitForTask(ctx, step.Node, upid)
+					output = "apt: " + exit
+					if exit != "OK" {
+						stepErr = fmt.Errorf("apt task: %s", exit)
 					}
 				} else {
-					output = "skipped (no salt or proxmox client)"
+					output = "apt update triggered"
 				}
-
-			case "proxmox_upgrade":
-				// Same as os_update but targets only proxmox packages via pveupgrade
-				if proxmox != nil {
-					upid, err := proxmox.NodeAPTUpdate(ctx, step.Node)
-					if err != nil {
-						stepErr = err
-						output = "pve-upgrade error: " + err.Error()
-					} else if upid != "" {
-						exit, _ := proxmox.WaitForTask(ctx, step.Node, upid)
-						output = "pve-upgrade: " + exit
-					} else {
-						output = "proxmox upgrade triggered"
-					}
-				} else {
-					output = "skipped (no proxmox client)"
-				}
-
-			case "reboot":
-				if proxmox != nil {
-					if err := proxmox.NodeReboot(ctx, step.Node); err != nil {
-						stepErr = err
-						output = "reboot error: " + err.Error()
-					} else {
-						output = "reboot command sent"
-						// Wait for node to go offline and come back (up to 10 min)
-						time.Sleep(30 * time.Second)
-					}
-				} else {
-					output = "skipped (no proxmox client)"
-				}
-
-			case "unevacuate":
-				// HA resources should automatically migrate back once node is online
-				// We just log that the node is available again
-				output = "node available; HA resources will re-balance automatically"
-				time.Sleep(5 * time.Second)
+			} else {
+				output = "skipped (no salt or proxmox client)"
 			}
 
-			status := "done"
-			if stepErr != nil {
-				status = "failed"
-				output = stepErr.Error()
+		case "proxmox_upgrade":
+			if proxmox != nil {
+				upid, err := proxmox.NodeAPTUpdate(ctx, step.Node)
+				if err != nil {
+					stepErr = err
+				} else if upid != "" {
+					exit, _ := proxmox.WaitForTask(ctx, step.Node, upid)
+					output = "pve-upgrade: " + exit
+					if exit != "OK" {
+						stepErr = fmt.Errorf("pve-upgrade task: %s", exit)
+					}
+				} else {
+					output = "proxmox upgrade triggered"
+				}
+			} else {
+				output = "skipped (no proxmox client)"
 			}
-			_ = database.UpdateMaintenanceStep(step.ID, status, output)
+
+		case "reboot":
+			if proxmox != nil {
+				if err := proxmox.NodeReboot(ctx, step.Node); err != nil {
+					stepErr = err
+				} else {
+					sleepCtx(ctx, rebootWait)
+					if err := waitForNodeOnline(ctx, proxmox, step.Node, 15*time.Minute); err != nil {
+						stepErr = err
+					} else {
+						output = "rebooted and back online"
+					}
+				}
+			} else {
+				output = "skipped (no proxmox client)"
+			}
+
+		case "unevacuate":
+			// HA resources migrate back automatically once the node is online.
+			output = "node available; HA resources will re-balance automatically"
 		}
 
-		now := time.Now()
-		finalStatus := "done"
-		_ = database.UpdateMaintenanceRunStatus(runID, finalStatus, &now)
-		return maintRunDoneMsg{runID: runID}
+		status := "done"
+		if stepErr != nil {
+			status = "failed"
+			anyFailed = true
+			skipNode = step.Node
+			if output != "" {
+				output += "; "
+			}
+			output += stepErr.Error()
+		}
+		_ = database.UpdateMaintenanceStep(step.ID, status, output)
 	}
+
+	now := time.Now()
+	finalStatus := "done"
+	if anyFailed {
+		finalStatus = "failed"
+	}
+	_ = database.UpdateMaintenanceRunStatus(runID, finalStatus, &now)
+	if anyFailed {
+		return maintRunDoneMsg{runID: runID, err: fmt.Errorf("one or more steps failed — see run steps")}
+	}
+	return maintRunDoneMsg{runID: runID}
 }
 
 // ── Messages ──────────────────────────────────────────────────────────────────

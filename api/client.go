@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/alytaphoenix/ratataskr/config"
 )
@@ -27,7 +28,9 @@ func NewClient(cfg *config.Config) *Client {
 		base:    strings.TrimRight(cfg.Host, "/") + "/api2/json",
 		tokenID: cfg.TokenID,
 		secret:  cfg.Secret,
-		http:    &http.Client{Transport: transport},
+		// Individual Proxmox API calls return quickly (long jobs hand back a
+		// UPID to poll); the timeout guards against hung connections.
+		http: &http.Client{Transport: transport, Timeout: 30 * time.Second},
 	}
 }
 

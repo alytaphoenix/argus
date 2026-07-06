@@ -25,58 +25,24 @@ func main() {
 	}
 
 	// Overlay keyring values for credentials not set in config/env.
-	if cfg.Secret == "" {
-		if v, err := gkr.Load(gkr.KeyProxmoxSecret); err == nil {
-			cfg.Secret = v
-		}
-	}
-	if cfg.Salt.Password == "" {
-		if v, err := gkr.Load(gkr.KeySaltPassword); err == nil {
-			cfg.Salt.Password = v
-		}
-	}
-	if cfg.Nomad.Token == "" {
-		if v, err := gkr.Load(gkr.KeyNomadToken); err == nil {
-			cfg.Nomad.Token = v
-		}
-	}
+	gkr.Overlay(&cfg.Secret, gkr.KeyProxmoxSecret)
+	gkr.Overlay(&cfg.Salt.Password, gkr.KeySaltPassword)
+	gkr.Overlay(&cfg.Nomad.Token, gkr.KeyNomadToken)
+	gkr.Overlay(&cfg.Wazuh.Password, gkr.KeyWazuhPassword)
+	gkr.Overlay(&cfg.CrowdSec.APIKey, gkr.KeyCrowdSecAPIKey)
+	gkr.Overlay(&cfg.Matchbox.Token, gkr.KeyMatchboxToken)
+	gkr.Overlay(&cfg.Technitium.Token, gkr.KeyTechnitiumToken)
+	gkr.Overlay(&cfg.Prometheus.Token, gkr.KeyPrometheusToken)
+	gkr.Overlay(&cfg.Claude.APIKey, gkr.KeyAnthropicAPIKey)
+	gkr.Overlay(&cfg.TrueNAS.APIKey, gkr.KeyTrueNASAPIKey)
+	gkr.Overlay(&cfg.Plex.Token, gkr.KeyPlexToken)
+	gkr.Overlay(&cfg.Loki.Token, gkr.KeyLokiToken)
+	gkr.Overlay(&cfg.HomeAssistant.Token, gkr.KeyHAToken)
 	sshPassword, _ := gkr.Load(gkr.KeySSHPassword)
 
-	// Overlay keyring values for integrations whose secrets may not be in config.
-	if cfg.Wazuh.Password == "" {
-		if v, err := gkr.Load(gkr.KeyWazuhPassword); err == nil {
-			cfg.Wazuh.Password = v
-		}
-	}
-	if cfg.CrowdSec.APIKey == "" {
-		if v, err := gkr.Load(gkr.KeyCrowdSecAPIKey); err == nil {
-			cfg.CrowdSec.APIKey = v
-		}
-	}
-	if cfg.Matchbox.Token == "" {
-		if v, err := gkr.Load(gkr.KeyMatchboxToken); err == nil {
-			cfg.Matchbox.Token = v
-		}
-	}
-	if cfg.Technitium.Token == "" {
-		if v, err := gkr.Load(gkr.KeyTechnitiumToken); err == nil {
-			cfg.Technitium.Token = v
-		}
-	}
-	if cfg.Prometheus.Token == "" {
-		if v, err := gkr.Load(gkr.KeyPrometheusToken); err == nil {
-			cfg.Prometheus.Token = v
-		}
-	}
-	if cfg.Claude.APIKey == "" {
-		if v, err := gkr.Load(gkr.KeyAnthropicAPIKey); err == nil {
-			cfg.Claude.APIKey = v
-		}
-	}
-	if cfg.TrueNAS.APIKey == "" {
-		if v, err := gkr.Load(gkr.KeyTrueNASAPIKey); err == nil {
-			cfg.TrueNAS.APIKey = v
-		}
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+		os.Exit(1)
 	}
 
 	proxmoxClient := api.NewClient(cfg)
@@ -105,32 +71,16 @@ func main() {
 	wazuhClient := api.NewWazuhClient(cfg.Wazuh)
 	trueNASClient := api.NewTrueNASClient(cfg.TrueNAS.URL, cfg.TrueNAS.APIKey, cfg.TrueNAS.Insecure)
 
-	// Overlay keyring value for plex token if not in config
-	if cfg.Plex.Token == "" {
-		if v, err := gkr.Load(gkr.KeyPlexToken); err == nil {
-			cfg.Plex.Token = v
-		}
-	}
 	var plexClient *api.PlexClient
 	if cfg.Plex.URL != "" {
 		plexClient = api.NewPlexClient(cfg.Plex.URL, cfg.Plex.Token, cfg.Plex.Insecure)
 	}
 
-	if cfg.Loki.Token == "" {
-		if v, err := gkr.Load(gkr.KeyLokiToken); err == nil {
-			cfg.Loki.Token = v
-		}
-	}
 	var lokiClient *api.LokiClient
 	if cfg.Loki.URL != "" {
 		lokiClient = api.NewLokiClient(cfg.Loki.URL, cfg.Loki.Token, cfg.Loki.Insecure)
 	}
 
-	if cfg.HomeAssistant.Token == "" {
-		if v, err := gkr.Load(gkr.KeyHAToken); err == nil {
-			cfg.HomeAssistant.Token = v
-		}
-	}
 	var haClient *api.HAClient
 	if cfg.HomeAssistant.URL != "" {
 		haClient = api.NewHAClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, cfg.HomeAssistant.Insecure)
@@ -209,8 +159,14 @@ func startMetricsServer(listen string, database *db.DB, cfg *config.Config) erro
 func writeMetricsText(w http.ResponseWriter, s *db.MetricsSnapshot) {
 	ts := s.ComputedAt.UnixMilli()
 
+	// HELP/TYPE must appear exactly once per metric family or Prometheus
+	// rejects the scrape.
+	headerDone := map[string]bool{}
 	g := func(name, help string, labels map[string]string, value float64) {
-		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", name, help, name)
+		if !headerDone[name] {
+			fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", name, help, name)
+			headerDone[name] = true
+		}
 		if len(labels) == 0 {
 			fmt.Fprintf(w, "%s %g %d\n", name, value, ts)
 			return

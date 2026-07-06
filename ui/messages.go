@@ -327,6 +327,10 @@ type maintRunDoneMsg struct {
 	err   error
 }
 
+// schedulerTickMsg drives the app-level scheduler that fires due
+// maintenance schedules regardless of which screen is open.
+type schedulerTickMsg struct{}
+
 // Bulk VM action messages
 type bulkActionDoneMsg struct {
 	action string

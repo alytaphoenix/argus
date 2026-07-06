@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -97,8 +98,12 @@ func (c *Client) SetCloudInit(ctx context.Context, node string, vmid int, opts C
 		body["cipassword"] = opts.Password
 	}
 	if opts.SSHKeys != "" {
-		// Proxmox expects URL-encoded SSH keys
-		body["sshkeys"] = strings.ReplaceAll(opts.SSHKeys, "\n", "%0a")
+		// Proxmox expects the whole value RFC 3986 percent-encoded — key
+		// material contains '+', '/', '=', and spaces, not just newlines.
+		// QueryEscape encodes '+' to %2B first, so the remaining '+' are
+		// spaces and can be rewritten to %20.
+		encoded := strings.ReplaceAll(url.QueryEscape(opts.SSHKeys), "+", "%20")
+		body["sshkeys"] = encoded
 	}
 	if opts.IPConfig != "" {
 		body["ipconfig0"] = opts.IPConfig

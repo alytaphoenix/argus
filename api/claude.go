@@ -52,26 +52,23 @@ type VMResizeExplanation struct {
 	RiskLevel  string   // "low", "medium", "high"
 }
 
-// ExplainVMResize asks Claude to explain the sizing analysis and proposed
-// changes in plain English. The returned explanation is shown to the user
-// before they confirm the resize.
-func (c *ClaudeClient) ExplainVMResize(ctx context.Context, a VMSizingAnalysis, nodeStats *NodeStats) (*VMResizeExplanation, error) {
-	prompt := buildResizePrompt(a, nodeStats)
-
+// sendMessage posts a single-turn message to the Anthropic Messages API and
+// returns the first text content block. Shared by all Claude helpers.
+func (c *ClaudeClient) sendMessage(ctx context.Context, system, prompt string, maxTokens int) (string, error) {
 	type message struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"model":      c.model,
-		"max_tokens": claudeMaxTokens,
-		"system":     resizeSystemPrompt,
+		"max_tokens": maxTokens,
+		"system":     system,
 		"messages":   []message{{Role: "user", Content: prompt}},
 	})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, claudeAPIURL, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	req.Header.Set("x-api-key", c.apiKey)
 	req.Header.Set("anthropic-version", claudeAPIVersion)
@@ -79,7 +76,7 @@ func (c *ClaudeClient) ExplainVMResize(ctx context.Context, a VMSizingAnalysis, 
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("claude: %w", err)
+		return "", fmt.Errorf("claude: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -90,9 +87,9 @@ func (c *ClaudeClient) ExplainVMResize(ctx context.Context, a VMSizingAnalysis, 
 		}
 		json.Unmarshal(body, &errResp) //nolint:errcheck
 		if errResp.Error.Message != "" {
-			return nil, fmt.Errorf("claude API: %s", errResp.Error.Message)
+			return "", fmt.Errorf("claude API: %s", errResp.Error.Message)
 		}
-		return nil, fmt.Errorf("claude API: HTTP %s", resp.Status)
+		return "", fmt.Errorf("claude API: HTTP %s", resp.Status)
 	}
 
 	var apiResp struct {
@@ -102,13 +99,22 @@ func (c *ClaudeClient) ExplainVMResize(ctx context.Context, a VMSizingAnalysis, 
 		} `json:"content"`
 	}
 	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return nil, fmt.Errorf("claude: decode: %w", err)
+		return "", fmt.Errorf("claude: decode: %w", err)
 	}
 	if len(apiResp.Content) == 0 {
-		return nil, fmt.Errorf("claude: empty response")
+		return "", fmt.Errorf("claude: empty response")
 	}
+	return apiResp.Content[0].Text, nil
+}
 
-	text := apiResp.Content[0].Text
+// ExplainVMResize asks Claude to explain the sizing analysis and proposed
+// changes in plain English. The returned explanation is shown to the user
+// before they confirm the resize.
+func (c *ClaudeClient) ExplainVMResize(ctx context.Context, a VMSizingAnalysis, nodeStats *NodeStats) (*VMResizeExplanation, error) {
+	text, err := c.sendMessage(ctx, resizeSystemPrompt, buildResizePrompt(a, nodeStats), claudeMaxTokens)
+	if err != nil {
+		return nil, err
+	}
 	return parseExplanation(text), nil
 }
 
@@ -204,59 +210,9 @@ func parseExplanation(text string) *VMResizeExplanation {
 // and returns the plain-text response. The caller provides a context string
 // describing current homelab state (nodes, alerts, etc.) to inject as system.
 func (c *ClaudeClient) NaturalLanguageQuery(ctx context.Context, systemContext, question string) (string, error) {
-	type message struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
 	system := "You are a helpful homelab assistant with access to the following live state:\n\n" + systemContext +
 		"\n\nAnswer questions concisely and accurately based on this data. Use plain text, no markdown."
-
-	reqBody, _ := json.Marshal(map[string]interface{}{
-		"model":      c.model,
-		"max_tokens": 512,
-		"system":     system,
-		"messages":   []message{{Role: "user", Content: question}},
-	})
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, claudeAPIURL, bytes.NewReader(reqBody))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", claudeAPIVersion)
-	req.Header.Set("content-type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("claude: %w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode >= 400 {
-		var errResp struct {
-			Error struct{ Message string } `json:"error"`
-		}
-		json.Unmarshal(body, &errResp) //nolint:errcheck
-		if errResp.Error.Message != "" {
-			return "", fmt.Errorf("claude API: %s", errResp.Error.Message)
-		}
-		return "", fmt.Errorf("claude API: HTTP %s", resp.Status)
-	}
-
-	var apiResp struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return "", fmt.Errorf("claude: decode: %w", err)
-	}
-	if len(apiResp.Content) == 0 {
-		return "", fmt.Errorf("claude: empty response")
-	}
-	return apiResp.Content[0].Text, nil
+	return c.sendMessage(ctx, system, question, 512)
 }
 
 func safePercent(used, total float64) float64 {

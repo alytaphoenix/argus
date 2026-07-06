@@ -101,6 +101,9 @@ type WazuhConfig struct {
 	URL      string `toml:"url"`      // e.g. https://wazuh-manager:55000
 	Username string `toml:"username"` // wazuh-wui or similar
 	Password string `toml:"password"`
+	// Insecure skips TLS verification. Wazuh ships with a self-signed cert,
+	// so this defaults to true when unset (see NewWazuhClient).
+	Insecure *bool `toml:"insecure"`
 }
 
 // ClaudeConfig configures the Anthropic Claude API for AI-powered recommendations.
@@ -292,15 +295,21 @@ func Load() (*Config, error) {
 	// Apply globals → propagate to sub-sections if not already set.
 	cfg.ApplyGlobals()
 
+	return cfg, nil
+}
+
+// Validate checks that the required Proxmox credentials are present.
+// Called after all sources (file, env, keyring overlay) have been merged,
+// so secrets stored only in the macOS Keychain are accepted.
+func (cfg *Config) Validate() error {
 	if cfg.Host == "" {
 		p, _ := defaultPath()
-		return nil, fmt.Errorf("PROXMOX_HOST not set and no config at %s", p)
+		return fmt.Errorf("PROXMOX_HOST not set and no config at %s", p)
 	}
 	if cfg.TokenID == "" || cfg.Secret == "" {
-		return nil, fmt.Errorf("PROXMOX_TOKEN_ID and PROXMOX_SECRET required")
+		return fmt.Errorf("PROXMOX_TOKEN_ID and PROXMOX_SECRET required (config, env, or Keychain)")
 	}
-
-	return cfg, nil
+	return nil
 }
 
 // ApplyGlobals propagates [globals] settings into sub-sections that support them.

@@ -32,13 +32,13 @@ func NewPlexClient(base, token string, insecure bool) *PlexClient {
 }
 
 func (c *PlexClient) get(ctx context.Context, path string, out interface{}) error {
-	url := c.base + path
+	reqURL := c.base + path
+	sep := "?"
 	if strings.Contains(path, "?") {
-		url += "&X-Plex-Token=" + c.token
-	} else {
-		url += "?X-Plex-Token=" + c.token
+		sep = "&"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	reqURL += sep + "X-Plex-Token=" + url.QueryEscape(c.token)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return err
 	}

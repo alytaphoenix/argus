@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -124,6 +125,9 @@ func NewApp(client *api.Client, saltClient *api.SaltClient, nomadClient *api.Nom
 		lastCSBanCount:     -1,
 		lastWazuhHighCount: -1,
 		nodes:              NewNodesModel(client, saltClient != nil, nomadClient != nil, database),
+		// Constructed eagerly so FireMatchingRoutes has the stored routes even
+		// when the Alerts screen has never been opened.
+		alertRoutes:   NewAlertRoutesModel(database),
 		claudeOverlay: NewClaudeOverlay(claudeClient),
 	}
 	a.loadAppSettings()
@@ -138,7 +142,56 @@ func (a *App) loadAppSettings() {
 }
 
 func (a App) Init() tea.Cmd {
-	return tea.Batch(a.nodes.Init(), a.checkMediaStatusCmd())
+	return tea.Batch(a.nodes.Init(), a.checkMediaStatusCmd(), a.schedulerTickCmd())
+}
+
+// schedulerTickCmd re-arms the once-a-minute scheduler tick.
+func (a App) schedulerTickCmd() tea.Cmd {
+	return tea.Tick(time.Minute, func(time.Time) tea.Msg { return schedulerTickMsg{} })
+}
+
+// runDueSchedulesCmd fires any maintenance schedules whose run_at has passed.
+// Each schedule is advanced (or disabled, for one-shots) before its run starts
+// so an overlapping tick cannot fire it twice.
+func (a App) runDueSchedulesCmd() tea.Cmd {
+	client := a.client
+	salt := a.saltClient
+	database := a.database
+	return func() tea.Msg {
+		if database == nil {
+			return nil
+		}
+		due, err := database.DueMaintenanceSchedules(time.Now())
+		if err != nil || len(due) == 0 {
+			return nil
+		}
+		var last tea.Msg
+		for _, s := range due {
+			if err := database.AdvanceMaintenanceSchedule(s, time.Now()); err != nil {
+				continue
+			}
+			var nodeOrder []string
+			_ = json.Unmarshal([]byte(s.NodeOrder), &nodeOrder)
+			if len(nodeOrder) == 0 {
+				continue
+			}
+			var tf db.MaintenanceTaskFlags
+			_ = json.Unmarshal([]byte(s.TaskFlags), &tf)
+			runID, err := database.CreateMaintenanceRun(db.MaintenanceRun{
+				ScheduleID: s.ID,
+				Name:       s.Name + " (scheduled)",
+				Status:     "pending",
+				NodeOrder:  s.NodeOrder,
+				TaskFlags:  s.TaskFlags,
+				HAAware:    s.HAAware,
+			})
+			if err != nil {
+				continue
+			}
+			last = runMaintenance(client, salt, database, runID, nodeOrder, tf, s.HAAware)
+		}
+		return last
+	}
 }
 
 // checkMediaStatusCmd does a lightweight Plex + servarr ping for the nodes-screen badge.
@@ -456,6 +509,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.mediaBadgePlex = &online
 		a.mediaBadgeServices = msg.services
 		return a, nil
+
+	case schedulerTickMsg:
+		return a, tea.Batch(a.runDueSchedulesCmd(), a.schedulerTickCmd())
 
 	case settingsSavedMsg:
 		// Reload app settings and push to any active sub-models that hold a copy.

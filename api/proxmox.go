@@ -239,7 +239,11 @@ func (c *Client) WaitForTask(ctx context.Context, node, upid string) (string, er
 		if status.Status == "stopped" {
 			return status.ExitStatus, nil
 		}
-		time.Sleep(3 * time.Second)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
 	}
 }
 

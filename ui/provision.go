@@ -156,8 +156,6 @@ func (m ProvisionModel) submit() tea.Cmd {
 	sshKey := strings.TrimSpace(m.inputs[provFieldSSHKey].Value())
 	ipConfig := strings.TrimSpace(m.inputs[provFieldIPConfig].Value())
 	saltProfile := strings.TrimSpace(m.inputs[provFieldSaltProfile].Value())
-	_ = cpu
-	_ = memory
 
 	batchCount, _ := strconv.Atoi(strings.TrimSpace(m.inputs[provFieldBatch].Value()))
 	if batchCount < 1 {
@@ -172,7 +170,9 @@ func (m ProvisionModel) submit() tea.Cmd {
 	defaults := m.defaults
 
 	return func() tea.Msg {
-		timeout := time.Duration(batchCount) * 90 * time.Second
+		// Full clones can take minutes each; allow enough headroom to wait
+		// for each clone task before configuring the VM.
+		timeout := time.Duration(batchCount) * 10 * time.Minute
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
@@ -207,6 +207,23 @@ func (m ProvisionModel) submit() tea.Cmd {
 			})
 			if err != nil {
 				return provisionDoneMsg{count: i, err: fmt.Errorf("vm %d clone: %w", i+1, err)}
+			}
+
+			// The VM is locked until the clone task finishes; config changes
+			// (resources, cloud-init) are rejected while the lock is held.
+			if exit, err := client.WaitForTask(ctx, node.Name, taskID); err != nil {
+				return provisionDoneMsg{taskID: taskID, count: i,
+					err: fmt.Errorf("vm %d clone wait: %w", i+1, err)}
+			} else if exit != "OK" {
+				return provisionDoneMsg{taskID: taskID, count: i,
+					err: fmt.Errorf("vm %d clone task: %s", i+1, exit)}
+			}
+
+			if cpu > 0 || memory > 0 {
+				if err := client.ResizeVMConfig(ctx, node.Name, "qemu", newVMID, cpu, memory); err != nil {
+					return provisionDoneMsg{taskID: taskID, count: i,
+						err: fmt.Errorf("vm %d resources (cloned as %d): %w", i+1, newVMID, err)}
+				}
 			}
 
 			hasCIFields := ciUser != "" || ciPassword != "" || sshKey != "" || ipConfig != ""

@@ -17,11 +17,12 @@ import (
 )
 
 // RunbookStep is one step in a runbook definition.
+// Supported kinds: "salt" (state.apply on target) and "shell" (cmd.run on target).
 type RunbookStep struct {
 	Name    string `json:"name"`
-	Kind    string `json:"kind"`    // "salt", "shell", "http", "nomad_restart"
-	Target  string `json:"target"`  // minion, host, URL, or job ID
-	Command string `json:"command"` // state name, shell cmd, or HTTP method
+	Kind    string `json:"kind"`    // "salt" | "shell"
+	Target  string `json:"target"`  // minion ID or glob
+	Command string `json:"command"` // salt state name, or shell command
 }
 
 type rbTab int
@@ -276,6 +277,7 @@ func (m RunbooksModel) executeRunbookCmd(rb db.Runbook) tea.Cmd {
 		}
 
 		var outputLines []string
+		failed := false
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 
@@ -287,22 +289,44 @@ func (m RunbooksModel) executeRunbookCmd(rb db.Runbook) tea.Cmd {
 					jid, err := saltClient.ApplyState(ctx, step.Target, step.Command)
 					if err != nil {
 						line += " ERROR: " + err.Error()
+						failed = true
 					} else {
 						line += " jid=" + jid
 					}
 				} else {
-					line += " SKIP (no salt client)"
+					line += " ERROR: no salt client configured"
+					failed = true
 				}
 			case "shell":
-				line += " SKIP (shell steps run on Salt minion — use kind:salt with cmd.run)"
+				// Runs the command on the target minion via Salt cmd.run.
+				if saltClient != nil {
+					out, err := saltClient.RunCmd(ctx, step.Target, step.Command)
+					if err != nil {
+						line += " ERROR: " + err.Error()
+						failed = true
+					} else {
+						line += " → " + truncate(strings.ReplaceAll(out, "\n", " "), 200)
+					}
+				} else {
+					line += " ERROR: no salt client configured"
+					failed = true
+				}
 			default:
-				line += " SKIP (unknown kind)"
+				line += " ERROR: unsupported step kind (supported: salt, shell)"
+				failed = true
 			}
 			outputLines = append(outputLines, line)
 		}
 
 		output := strings.Join(outputLines, "\n")
-		_ = database.UpdateRunbookRun(runID, "done", output)
+		status := "done"
+		if failed {
+			status = "failed"
+		}
+		_ = database.UpdateRunbookRun(runID, status, output)
+		if failed {
+			return runbookRunDoneMsg{runID: runID, err: fmt.Errorf("one or more steps failed")}
+		}
 		return runbookRunDoneMsg{runID: runID}
 	}
 }

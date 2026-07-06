@@ -90,6 +90,10 @@ func (c *StepCAClient) Health(ctx context.Context) (*StepCAHealth, error) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("stepca health: HTTP %s: %s", resp.Status, truncateBody(body))
+	}
+
 	var h StepCAHealth
 	if err := json.Unmarshal(body, &h); err != nil {
 		return nil, fmt.Errorf("stepca health: decode: %w", err)

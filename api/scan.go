@@ -31,9 +31,17 @@ var CommonPorts = []int{
 	8080, 8443, 8888, 9200, 27017,
 }
 
-// PortScan dials each port on target concurrently and returns findings for
-// every open port it discovers. The context deadline controls overall scan time.
+// PortScan dials each port on target concurrently using the default per-port
+// timeout. The context deadline controls overall scan time.
 func PortScan(ctx context.Context, target string, ports []int) []ScanFinding {
+	return PortScanTimeout(ctx, target, ports, 600*time.Millisecond)
+}
+
+// PortScanTimeout is PortScan with a configurable per-port dial timeout.
+func PortScanTimeout(ctx context.Context, target string, ports []int, dialTimeout time.Duration) []ScanFinding {
+	if dialTimeout <= 0 {
+		dialTimeout = 600 * time.Millisecond
+	}
 	type result struct {
 		port int
 		open bool
@@ -47,7 +55,7 @@ func PortScan(ctx context.Context, target string, ports []int) []ScanFinding {
 		go func(p int) {
 			defer wg.Done()
 			addr := fmt.Sprintf("%s:%d", target, p)
-			d := net.Dialer{Timeout: 600 * time.Millisecond}
+			d := net.Dialer{Timeout: dialTimeout}
 			conn, err := d.DialContext(ctx, "tcp", addr)
 			if err == nil {
 				conn.Close()
@@ -201,7 +209,12 @@ func VMFirewallScan(ctx context.Context, client *Client, guests []Guest) []ScanF
 // DiscoverHost runs a port scan and returns a terse service map string and findings.
 // The summary string is suitable for storing in service_hosts.discovered_ports.
 func DiscoverHost(ctx context.Context, host string) (summary string, findings []ScanFinding) {
-	findings = PortScan(ctx, host, CommonPorts)
+	return DiscoverHostPorts(ctx, host, CommonPorts, 600*time.Millisecond)
+}
+
+// DiscoverHostPorts is DiscoverHost with a caller-supplied port list and dial timeout.
+func DiscoverHostPorts(ctx context.Context, host string, ports []int, dialTimeout time.Duration) (summary string, findings []ScanFinding) {
+	findings = PortScanTimeout(ctx, host, ports, dialTimeout)
 	var parts []string
 	for _, f := range findings {
 		parts = append(parts, f.Check)
@@ -210,6 +223,23 @@ func DiscoverHost(ctx context.Context, host string) (summary string, findings []
 		summary = strings.Join(parts, ",")
 	}
 	return summary, findings
+}
+
+// ParseExtraPorts parses a comma-separated port list (e.g. "8080,8443").
+// Invalid entries are skipped.
+func ParseExtraPorts(s string) []int {
+	var out []int
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		var p int
+		if _, err := fmt.Sscanf(part, "%d", &p); err == nil && p > 0 && p <= 65535 {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ScanSeverityOrder returns a numeric weight for severity (higher = more severe).

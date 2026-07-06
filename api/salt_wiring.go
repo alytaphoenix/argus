@@ -44,11 +44,16 @@ const WiringStateTemplate = `# services.wiring — managed by ratataskr
 {% if dns_url and dns_token and zone and host %}
 {{ name }}_dns:
   cmd.run:
+    # Token is passed through the environment ($DNS_TOKEN) rather than embedded
+    # in the command name, so it does not appear in job returns or process args.
     - name: >-
-        curl -sf "{{ dns_url }}/api/zones/records/add?token={{ dns_token }}&zone={{ zone }}&domain={{ fqdn }}&type=A&ipAddress={{ host }}&overwrite=true"
+        curl -sf "{{ dns_url }}/api/zones/records/add?token=$DNS_TOKEN&zone={{ zone }}&domain={{ fqdn }}&type=A&ipAddress={{ host }}&overwrite=true"
     - unless: >-
-        curl -sf "{{ dns_url }}/api/zones/records/get?token={{ dns_token }}&zone={{ zone }}&domain={{ fqdn }}" |
+        curl -sf "{{ dns_url }}/api/zones/records/get?token=$DNS_TOKEN&zone={{ zone }}&domain={{ fqdn }}" |
         python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if any(r.get('rData',{}).get('ipAddress')=='{{ host }}' for r in d.get('response',{}).get('records',[])) else 1)"
+    - env:
+        - DNS_TOKEN: '{{ dns_token }}'
+    - output_loglevel: quiet
 {% endif %}
 
 {% if svc.get('traefik', false) %}
@@ -81,7 +86,11 @@ const WiringStateTemplate = `# services.wiring — managed by ratataskr
         /etc/step/certs/{{ fqdn }}.crt /etc/step/certs/{{ fqdn }}.key
         --ca-url {{ stepca_url }} --root /etc/step/certs/root_ca.crt
         --not-after 2160h --force
-    - creates: /etc/step/certs/{{ fqdn }}.crt
+    # Issue when the cert is missing or within 30 days of expiry, so it renews
+    # instead of only ever being created once.
+    - onlyif: >-
+        test ! -f /etc/step/certs/{{ fqdn }}.crt ||
+        step certificate needs-renewal /etc/step/certs/{{ fqdn }}.crt --expires-in 720h
 {% endif %}
 
 {% endfor %}

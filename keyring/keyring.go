@@ -45,3 +45,13 @@ func IsSet(key string) bool {
 	_, err := keyring.Get(service, key)
 	return err == nil
 }
+
+// Overlay fills *target from the keychain when it is empty and the key exists.
+// Values already set (config file or env) are never overwritten.
+func Overlay(target *string, key string) {
+	if *target == "" {
+		if v, err := keyring.Get(service, key); err == nil {
+			*target = v
+		}
+	}
+}

@@ -82,6 +82,7 @@ type toolCallParams struct {
 
 type toolResult struct {
 	Content []contentBlock `json:"content"`
+	IsError bool           `json:"isError,omitempty"`
 }
 
 type contentBlock struct {
@@ -693,7 +694,16 @@ func callTool(name string, args map[string]any, c *mcpClients) (toolResult, erro
 		ciSSH := str(args, "ci_ssh_keys")
 		ciIP := str(args, "ci_ip_config")
 		if ciUser != "" || ciPass != "" || ciSSH != "" || ciIP != "" {
-			if err := c.proxmox.SetCloudInit(ctx, node, newVMID, api.CloudInitOptions{
+			// The VM stays locked until the clone task finishes; config
+			// changes are rejected while the lock is held.
+			waitCtx, waitCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer waitCancel()
+			if exit, err := c.proxmox.WaitForTask(waitCtx, node, taskID); err != nil {
+				return text(fmt.Sprintf("VM %d cloned (task %s) but waiting for clone failed: %v", newVMID, taskID, err)), nil
+			} else if exit != "OK" {
+				return text(fmt.Sprintf("VM %d clone task ended with status %q; cloud-init not applied", newVMID, exit)), nil
+			}
+			if err := c.proxmox.SetCloudInit(waitCtx, node, newVMID, api.CloudInitOptions{
 				User: ciUser, Password: ciPass, SSHKeys: ciSSH, IPConfig: ciIP,
 			}); err != nil {
 				return text(fmt.Sprintf("VM %d cloned (task %s) but cloud-init failed: %v", newVMID, taskID, err)), nil
@@ -842,8 +852,12 @@ func callTool(name string, args map[string]any, c *mcpClients) (toolResult, erro
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("%-10s %-20s %-10s  %s\n", "ID", "TASK GROUP", "STATUS", "NODE"))
 		for _, a := range allocs {
+			id := a.ID
+			if len(id) > 8 {
+				id = id[:8]
+			}
 			sb.WriteString(fmt.Sprintf("%-10s %-20s %-10s  %s\n",
-				a.ID[:8], a.TaskGroup, a.ClientStatus, a.NodeName))
+				id, a.TaskGroup, a.ClientStatus, a.NodeName))
 		}
 		return text(sb.String()), nil
 
@@ -1346,6 +1360,10 @@ func main() {
 	// Overlay keyring credentials
 	overlayKeyring(cfg)
 
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("config: %v", err)
+	}
+
 	c := &mcpClients{}
 
 	c.proxmox = api.NewClient(cfg)
@@ -1449,7 +1467,10 @@ func main() {
 			}
 			result, err := callTool(p.Name, p.Arguments, c)
 			if err != nil {
-				result = text("error: " + err.Error())
+				result = toolResult{
+					Content: []contentBlock{{Type: "text", Text: "error: " + err.Error()}},
+					IsError: true,
+				}
 			}
 			resp = ok(req.ID, result)
 
@@ -1472,25 +1493,18 @@ func main() {
 }
 
 func overlayKeyring(cfg *config.Config) {
-	overlay := func(target *string, key string) {
-		if *target == "" {
-			if v, err := gkr.Load(key); err == nil {
-				*target = v
-			}
-		}
-	}
-	overlay(&cfg.Secret, gkr.KeyProxmoxSecret)
-	overlay(&cfg.Salt.Password, gkr.KeySaltPassword)
-	overlay(&cfg.Nomad.Token, gkr.KeyNomadToken)
-	overlay(&cfg.Wazuh.Password, gkr.KeyWazuhPassword)
-	overlay(&cfg.CrowdSec.APIKey, gkr.KeyCrowdSecAPIKey)
-	overlay(&cfg.Matchbox.Token, gkr.KeyMatchboxToken)
-	overlay(&cfg.Technitium.Token, gkr.KeyTechnitiumToken)
-	overlay(&cfg.Prometheus.Token, gkr.KeyPrometheusToken)
-	overlay(&cfg.TrueNAS.APIKey, gkr.KeyTrueNASAPIKey)
-	overlay(&cfg.Plex.Token, gkr.KeyPlexToken)
-	overlay(&cfg.HomeAssistant.Token, gkr.KeyHAToken)
-	overlay(&cfg.Loki.Token, gkr.KeyLokiToken)
+	gkr.Overlay(&cfg.Secret, gkr.KeyProxmoxSecret)
+	gkr.Overlay(&cfg.Salt.Password, gkr.KeySaltPassword)
+	gkr.Overlay(&cfg.Nomad.Token, gkr.KeyNomadToken)
+	gkr.Overlay(&cfg.Wazuh.Password, gkr.KeyWazuhPassword)
+	gkr.Overlay(&cfg.CrowdSec.APIKey, gkr.KeyCrowdSecAPIKey)
+	gkr.Overlay(&cfg.Matchbox.Token, gkr.KeyMatchboxToken)
+	gkr.Overlay(&cfg.Technitium.Token, gkr.KeyTechnitiumToken)
+	gkr.Overlay(&cfg.Prometheus.Token, gkr.KeyPrometheusToken)
+	gkr.Overlay(&cfg.TrueNAS.APIKey, gkr.KeyTrueNASAPIKey)
+	gkr.Overlay(&cfg.Plex.Token, gkr.KeyPlexToken)
+	gkr.Overlay(&cfg.HomeAssistant.Token, gkr.KeyHAToken)
+	gkr.Overlay(&cfg.Loki.Token, gkr.KeyLokiToken)
 }
 
 func buildServarrClients(cfg *config.Config) map[string]*api.ServarrClient {

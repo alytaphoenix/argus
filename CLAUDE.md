@@ -38,15 +38,22 @@ Bubble Tea TUI for managing a Proxmox homelab. Integrates Proxmox, Salt, Nomad, 
 8. `Security` — CrowdSec decisions + Wazuh agents/alerts + TCP port scan
 9. `Maintenance` — scheduled cluster-wide OS/Proxmox updates with HA awareness
 10. `Plex` — Plex Media Server + Servarr companion services checklist
-11. `Settings` — DB-backed configurable thresholds and timeouts
-12. `Keys` — macOS Keychain credential manager
+11. `Runbooks` — user-defined salt/shell step sequences with run history
+12. `Alerts` — alert routing rules (CrowdSec/Wazuh events → webhooks)
+13. `Lifecycle` — VM lifecycle policies (stop/snapshot long-running tagged VMs)
+14. `Settings` — DB-backed configurable thresholds and timeouts
+15. `Keys` — macOS Keychain credential manager
+
+Scheduled maintenance runs and due schedules are fired by a once-a-minute
+scheduler tick in `ui/app.go` (`schedulerTickCmd` → `runDueSchedulesCmd`),
+independent of which screen is open.
 
 **Packages:**
 
 - `config/` — loads `~/.config/ratataskr/config.toml` or env vars. `[salt]`, `[nomad]`, `[plex]`, `[servarr.*]`, `[homeassistant]`, `[loki]` are optional; omitting them disables those screens/features.
 - `api/client.go` — Proxmox HTTP client, `PVEAPIToken` header auth, response unwrapper (`{"data": ...}`).
 - `api/proxmox.go` — `Nodes`, `Guests` (merges qemu+lxc sorted by VMID), `GuestAction`, `GuestStatus`, `NodeVersion`, `Snapshots`, `CreateSnapshot`, `DeleteSnapshot`, `HAResources`, `MigrateHAResourcesOffNode`, `NodeAPTUpdate`, `WaitForTask`, `NodeReboot`.
-- `api/salt.go` — session login → `X-Auth-Token`. `Minions` = GET /minions (cached grains) + live `test.ping`. `ApplyState` uses `local_async` (returns JID immediately). `JobResult`, `JournalLogs`, `JobsForMinion`, `WriteFile`.
+- `api/salt.go` — session login → `X-Auth-Token`, auto-refreshed via `ensureToken` when the cached token nears expiry (salt-api tokens expire, default 12h). `Minions` = GET /minions (cached grains) + live `test.ping`. `ApplyState` uses `local_async` (returns JID immediately). `JobResult`, `JournalLogs` (rejects unsafe unit names), `JobsForMinion`, `WriteFile` (rejects paths with quotes/newlines), `RunCmd` (cmd.run on a target).
 - `api/nomad.go` — `NomadClient` with `X-Nomad-Token` (optional ACL). `Jobs` (GET /jobs?meta=true with summaries), `JobAllocations`, `StopJob` (DELETE /job/{id}). `NomadJob.Totals()` sums running/failed/lost across task groups.
 - `api/plex.go` — `PlexClient` (X-Plex-Token auth): `ServerInfo`, `Libraries`, `Sessions`, `Ping`, `AddLibrary`, `FetchAll`. `ServarrClient` (X-Api-Key auth): `SystemStatus`, `Health`, `Queue`, `Ping`, `FetchStatus`. `MediaServices` catalog (12 services).
 - `api/truenas.go` — `TrueNASClient`: pools, datasets, alerts, services, `FetchAll` (combined status). Dataset `Name` is the ZFS path (e.g. `tank/media`); mount path = `/mnt/` + Name.
@@ -68,7 +75,7 @@ Bubble Tea TUI for managing a Proxmox homelab. Integrates Proxmox, Salt, Nomad, 
 - `ui/services_certs.go` — Certificates tab (DB-backed cert list).
 - `ui/services_truenas.go` — TrueNAS tab (pools, alerts, services).
 - `ui/services_ha.go` — Home Assistant tab (entity list, lazy-loaded on first visit).
-- `db/db.go` — SQLite WAL mode, versioned migrations v1–v10. Tables: `provisioned_vms`, `ssh_host_keys`, `salt_events`, `nomad_job_events`, `services`, `health_checks`, `certificates`, `pxe_profiles`, `pxe_groups`, `pxe_boot_events`, `service_hosts`, `security_events`, `app_settings`, `maintenance_schedules`, `maintenance_runs`, `maintenance_run_steps`.
+- `db/db.go` — SQLite WAL mode. Migrations run as sequential `CREATE TABLE IF NOT EXISTS` / `ALTER` blocks at open (not strictly version-ordered in source); the destructive v16 certificates rebuild is guarded by `PRAGMA user_version`. Tables: `cloud_init_profiles`, `salt_profiles`, `provisioned_vms`, `salt_apply_events`, `nomad_job_snapshots`, `nomad_job_events`, `services`, `service_health_checks`, `certificates`, `dns_records_cache`, `vm_resize_events`, `pxe_profiles`, `pxe_groups`, `pxe_boot_events`, `security_events`, `service_hosts`, `node_ssh_credentials`, `scan_results`, `app_settings`, `node_metrics_history`, `service_uptime_events`, `runbooks`, `runbook_runs`, `alert_routes`, `vm_lifecycle_policies`, `maintenance_schedules`, `maintenance_runs`, `maintenance_run_steps`.
 - `keyring/` — macOS Keychain via `github.com/zalando/go-keyring`. Keys: `proxmox_secret`, `salt_password`, `nomad_token`, `ssh_password`, `wazuh_password`, `crowdsec_api_key`, `matchbox_token`, `technitium_token`, `prometheus_token`, `anthropic_api_key`, `truenas_api_key`, `plex_token`, `homeassistant_token`, `loki_token`.
 - `cmd/mcp-server/` — MCP stdio server exposing all integrations as tools for Claude/Hermes agents. Build separately with `go build ./cmd/mcp-server/`. Register with `claude mcp add ratataskr -- /path/to/ratataskr-mcp-server`.
 
@@ -82,21 +89,24 @@ Bubble Tea TUI for managing a Proxmox homelab. Integrates Proxmox, Salt, Nomad, 
 - `screenSaltDetail` → `screenSalt`
 - `screenNomadDetail` → `screenNomad`
 
-**DB migrations:** Each version adds tables/columns atomically. Current version: v10.
-- v1–v8: core tables (VMs, SSH keys, Salt/Nomad events, services, PXE, service_hosts, security_events)
-- v9: `app_settings` — configurable thresholds (Wazuh levels, scan timeout, ban lookback, health check timeout)
-- v10: `maintenance_schedules`, `maintenance_runs`, `maintenance_run_steps`
+**DB migrations:** `migrate()` executes a series of `CREATE TABLE IF NOT EXISTS`
+and idempotent `ALTER TABLE` blocks in source order (the labels v1–v16 in
+comments are historical, not literally ordered). `seedDefaultSettings()` inserts
+`app_settings` defaults with `ON CONFLICT DO NOTHING`. The only destructive step
+(v16 certificates rebuild) is gated by `PRAGMA user_version` and wrapped in a
+transaction so it runs exactly once.
 
-**app_settings keys:**
+**app_settings keys** (note dotted key names; defaults live in `defaultSettings`):
 | key | default | description |
 |-----|---------|-------------|
-| `wazuh_critical_level` | 12 | Wazuh alert level for CRITICAL |
-| `wazuh_high_level` | 10 | Wazuh alert level for HIGH |
-| `wazuh_medium_level` | 7 | Wazuh alert level for MEDIUM |
-| `scan_timeout_s` | 5 | TCP port scan timeout per host (seconds) |
-| `ban_lookback_hours` | 24 | Hours to look back for CrowdSec bans in service badges |
-| `health_check_timeout_s` | 10 | HTTP health check timeout (seconds) |
-| `maintenance_reboot_wait_s` | 30 | Seconds to wait after node reboot before continuing |
+| `wazuh.critical_level` | 12 | Wazuh rule level threshold for CRITICAL |
+| `wazuh.high_level` | 10 | Wazuh rule level threshold for HIGH |
+| `wazuh.medium_level` | 7 | Wazuh rule level threshold for MEDIUM |
+| `scan.timeout_ms` | 600 | TCP port scan connect timeout per port (ms) |
+| `scan.extra_ports` | (empty) | Extra comma-separated ports to scan |
+| `services.ban_lookback_hours` | 48 | Hours to look back for CrowdSec bans in service badges |
+| `services.healthcheck_timeout_s` | 15 | HTTP/TCP health check timeout (seconds) |
+| `maintenance.reboot_wait_s` | 30 | Seconds to wait after node reboot before polling for it to come back |
 
 ## API notes
 

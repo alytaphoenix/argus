@@ -48,9 +48,9 @@ func NewLifecycleModel(database *db.DB, proxmoxClient *api.Client) LifecycleMode
 		db:            database,
 		proxmoxClient: proxmoxClient,
 		nameInput:     make("policy name"),
-		tagInput:      make("VM name tag/prefix (e.g. dev-)"),
+		tagInput:      make("VM name tag/prefix (e.g. dev-) — required"),
 		actionInput:   make("stop | snapshot"),
-		idleInput:     make("idle hours threshold (e.g. 168 = 7 days)"),
+		idleInput:     make("uptime hours threshold (e.g. 168 = 7 days)"),
 	}
 	m.reload()
 	return m
@@ -133,8 +133,13 @@ func (m LifecycleModel) handleKey(msg tea.KeyMsg) (LifecycleModel, tea.Cmd) {
 		}
 	case "r":
 		if m.cursor < len(m.policies) {
+			p := m.policies[m.cursor]
+			if strings.TrimSpace(p.Tag) == "" {
+				m.notice = "refusing to run: empty tag would match every VM — set a tag first"
+				return m, nil
+			}
 			m.running = true
-			return m, m.runPolicyCmd(m.policies[m.cursor])
+			return m, m.runPolicyCmd(p)
 		}
 	}
 	return m, nil
@@ -175,6 +180,10 @@ func (m LifecycleModel) handleEdit(key string, msg tea.KeyMsg) (LifecycleModel, 
 			m.notice = "name required"
 			return m, nil
 		}
+		if p.Tag == "" {
+			m.notice = "tag required — an empty tag would match every VM"
+			return m, nil
+		}
 		if m.db != nil {
 			if _, err := m.db.SaveLifecyclePolicy(p); err != nil {
 				m.notice = "save error: " + err.Error()
@@ -213,7 +222,10 @@ func (m LifecycleModel) runPolicyCmd(p db.VMLifecyclePolicy) tea.Cmd {
 		if proxmox == nil {
 			return lifecycleRunDoneMsg{err: fmt.Errorf("Proxmox client not available")}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		if strings.TrimSpace(tag) == "" {
+			return lifecycleRunDoneMsg{err: fmt.Errorf("policy has no tag — refusing to match every VM")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
 		nodes, err := proxmox.Nodes(ctx)
@@ -228,24 +240,29 @@ func (m LifecycleModel) runPolicyCmd(p db.VMLifecyclePolicy) tea.Cmd {
 				continue
 			}
 			for _, g := range guests {
-				if tag != "" && !strings.Contains(g.Name, tag) {
+				if !strings.Contains(g.Name, tag) {
 					continue
 				}
 				if g.Status != "running" {
 					continue
 				}
-				// Use uptime as proxy for idle (no CPU metrics available here)
-				idleThresh := int64(p.IdleHours) * 3600
-				if g.Uptime < idleThresh {
+				// Uptime is a proxy for age, not idleness — the threshold means
+				// "running continuously for at least this long".
+				upThresh := int64(p.IdleHours) * 3600
+				if g.Uptime < upThresh {
 					continue
 				}
 				switch action {
 				case "stop":
-					_ = proxmox.GuestAction(ctx, g, "stop")
-					applied++
+					if proxmox.GuestAction(ctx, g, "stop") == nil {
+						applied++
+					}
 				case "snapshot":
-					// Snapshot not exposed in current API — log it
-					applied++
+					snapName := fmt.Sprintf("lifecycle-%s", time.Now().Format("20060102-150405"))
+					desc := fmt.Sprintf("auto snapshot by lifecycle policy #%d", policyID)
+					if _, err := proxmox.CreateSnapshot(ctx, g.Node, g.Type, g.VMID, snapName, desc); err == nil {
+						applied++
+					}
 				}
 			}
 		}
@@ -260,7 +277,7 @@ func (m LifecycleModel) runPolicyCmd(p db.VMLifecyclePolicy) tea.Cmd {
 func (m LifecycleModel) View() string {
 	var sb strings.Builder
 	sb.WriteString(styleTitle.Render("  VM Lifecycle Policies") + "\n")
-	sb.WriteString(styleDim.Render("  Auto-stop or snapshot idle VMs by name tag") + "\n\n")
+	sb.WriteString(styleDim.Render("  Stop or snapshot long-running VMs by name tag (threshold = continuous uptime)") + "\n\n")
 
 	if m.editing {
 		sb.WriteString(m.viewEdit())
@@ -319,7 +336,7 @@ func (m LifecycleModel) viewEdit() string {
 		{"  Name       ", m.nameInput},
 		{"  Tag/Prefix ", m.tagInput},
 		{"  Action     ", m.actionInput},
-		{"  Idle Hours ", m.idleInput},
+		{"  Uptime Hrs ", m.idleInput},
 	}
 	for i, f := range fields {
 		lbl := f.label

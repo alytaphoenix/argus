@@ -98,10 +98,13 @@ func (m ServicesModel) openProvisionDialogCmd(host string) tea.Cmd {
 }
 
 func (m ServicesModel) discoverHostCmd(host string) tea.Cmd {
+	dialTimeout := time.Duration(m.appSettings.ScanTimeoutMs) * time.Millisecond
+	ports := append([]int(nil), api.CommonPorts...)
+	ports = append(ports, api.ParseExtraPorts(m.appSettings.ScanExtraPorts)...)
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_, findings := api.DiscoverHost(ctx, host)
+		_, findings := api.DiscoverHostPorts(ctx, host, ports, dialTimeout)
 		return svcDiscoveryDoneMsg{host: host, findings: findings}
 	}
 }
@@ -144,10 +147,13 @@ func (m ServicesModel) markProvisionPendingCmd(host string) tea.Cmd {
 	database := m.database
 	return func() tea.Msg {
 		if database != nil {
-			_ = database.SaveServiceHost(db.ServiceHost{
-				Host:             host,
-				ProvisionPending: true,
-			})
+			// Merge with any existing row so we don't clobber vmid/node/ports.
+			h := db.ServiceHost{Host: host}
+			if existing, err := database.GetServiceHost(host); err == nil && existing != nil {
+				h = *existing
+			}
+			h.ProvisionPending = true
+			_ = database.SaveServiceHost(h)
 		}
 		return svcRegisteredMsg{host: host, registrationType: "provision_pending"}
 	}

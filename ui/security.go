@@ -329,6 +329,9 @@ func (m SecurityModel) loadGuestsCmd() tea.Cmd {
 
 func (m SecurityModel) runScanCmd(targets []string, guests []api.Guest) tea.Cmd {
 	client := m.proxmoxClient
+	dialTimeout := time.Duration(m.appSettings.ScanTimeoutMs) * time.Millisecond
+	ports := append([]int(nil), api.CommonPorts...)
+	ports = append(ports, api.ParseExtraPorts(m.appSettings.ScanExtraPorts)...)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
@@ -346,7 +349,7 @@ func (m SecurityModel) runScanCmd(targets []string, guests []api.Guest) tea.Cmd 
 			if t == "" {
 				continue
 			}
-			findings := api.PortScan(ctx, t, api.CommonPorts)
+			findings := api.PortScanTimeout(ctx, t, ports, dialTimeout)
 			all = append(all, findings...)
 		}
 
