@@ -1,5 +1,5 @@
 # Copy to ~/.config/ratataskr/config.toml
-# Env vars: PROXMOX_HOST, PROXMOX_TOKEN_ID, PROXMOX_SECRET
+# Env vars: PROXMOX_HOST, PROXMOX_TOKEN_ID, PROXMOX_SECRET, PROXMOX_USERNAME, PROXMOX_PASSWORD
 #           RATATASKR_SSH_USER, RATATASKR_SSH_KEY, RATATASKR_DOMAIN, RATATASKR_TIMEZONE
 #           SALT_URL, SALT_USERNAME, SALT_PASSWORD
 #           NOMAD_URL, NOMAD_TOKEN
@@ -11,10 +11,14 @@
 # Secrets should be stored in the macOS Keychain via the Keys screen (tab: Keys).
 # Config file values act as fallback only; keychain entries always take priority.
 
-# Proxmox — required
+# Proxmox — required. Two auth modes:
+#   Token auth (recommended): set token_id + secret
+#   Ticket auth: set username + password (e.g. "root@pam"); takes priority over token
 host     = "https://pve.yourdomain.com:8006"
 token_id = "user@pam!ratataskr"   # Datacenter > Permissions > API Tokens
 secret   = ""                    # leave empty — store in Keychain via Keys screen
+username = ""                    # e.g. "root@pam" for ticket auth instead of token
+password = ""                    # leave empty — store in Keychain (key: proxmox_password)
 insecure = true                  # skip TLS verify for self-signed certs
 
 # Global defaults — applied across all integrations

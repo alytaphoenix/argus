@@ -21,6 +21,7 @@ type credRow struct {
 // Global service credentials stored in the macOS Keychain.
 var credRows = []credRow{
 	{gkr.KeyProxmoxSecret, "Proxmox API secret", true},
+	{gkr.KeyProxmoxPassword, "Proxmox password (ticket auth)", true},
 	{gkr.KeySaltPassword, "Salt password", true},
 	{gkr.KeyNomadToken, "Nomad ACL token", true},
 	{gkr.KeySSHPassword, "SSH password (global)", true},

@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+// TestMain isolates the package from a real ~/.config/ratataskr/config.toml.
+// Tests that need a file set RATATASKR_CONFIG to their own temp path.
+func TestMain(m *testing.M) {
+	os.Setenv("RATATASKR_CONFIG", filepath.Join(os.TempDir(), "ratataskr-test-nonexistent.toml"))
+	os.Exit(m.Run())
+}
+
 // ── ApplyGlobals ──────────────────────────────────────────────────────────────
 
 func TestApplyGlobalsDefaultSSHUser(t *testing.T) {
@@ -272,19 +279,14 @@ api_key = "radarrkey"
 		t.Fatalf("write config: %v", err)
 	}
 
-	// Override HOME so Load finds our test config.
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", dir)
-	// Ensure no env vars interfere.
+	// Point Load at our test config; ensure no env vars interfere.
 	cleanup := setEnv(t,
+		"RATATASKR_CONFIG", cfgFile,
 		"PROXMOX_HOST", "",
 		"PROXMOX_TOKEN_ID", "",
 		"PROXMOX_SECRET", "",
 	)
-	defer func() {
-		os.Setenv("HOME", origHome)
-		cleanup()
-	}()
+	defer cleanup()
 
 	cfg, err := Load()
 	if err != nil {
@@ -374,13 +376,11 @@ pillar_base   = "/data/pillar"
 state_base    = "/data/salt"
 `), 0o600)
 
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", dir)
-	cleanup := setEnv(t, "PROXMOX_HOST", "", "PROXMOX_TOKEN_ID", "", "PROXMOX_SECRET", "")
-	defer func() {
-		os.Setenv("HOME", origHome)
-		cleanup()
-	}()
+	cleanup := setEnv(t,
+		"RATATASKR_CONFIG", filepath.Join(cfgDir, "config.toml"),
+		"PROXMOX_HOST", "", "PROXMOX_TOKEN_ID", "", "PROXMOX_SECRET", "",
+	)
+	defer cleanup()
 
 	cfg, err := Load()
 	if err != nil {
@@ -397,6 +397,55 @@ state_base    = "/data/salt"
 	}
 }
 
+func TestSaveProxmoxSetup(t *testing.T) {
+	cfgFile := filepath.Join(t.TempDir(), "config.toml")
+	cleanup := setEnv(t,
+		"RATATASKR_CONFIG", cfgFile,
+		"PROXMOX_HOST", "", "PROXMOX_TOKEN_ID", "", "PROXMOX_SECRET", "",
+		"PROXMOX_USERNAME", "", "PROXMOX_PASSWORD", "",
+	)
+	defer cleanup()
+
+	if err := SaveProxmoxSetup("https://pve.test:8006", "root@pam", true); err != nil {
+		t.Fatalf("SaveProxmoxSetup: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Host != "https://pve.test:8006" {
+		t.Errorf("Host = %q", cfg.Host)
+	}
+	if cfg.Username != "root@pam" {
+		t.Errorf("Username = %q", cfg.Username)
+	}
+	if !cfg.Insecure {
+		t.Error("Insecure should be true")
+	}
+	if cfg.Password != "" {
+		t.Error("password must never be written to the config file")
+	}
+	info, err := os.Stat(cfgFile)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("config file mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestValidateTicketAuth(t *testing.T) {
+	cfg := &Config{Host: "https://pve.test:8006", Username: "root@pam", Password: "pw"}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate with username/password: %v", err)
+	}
+	cfg.Password = ""
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for username without password")
+	}
+}
+
 func TestLoadEnvOverridesFileValues(t *testing.T) {
 	// Write a config file, then override with env vars.
 	dir := t.TempDir()
@@ -408,17 +457,13 @@ token_id = "file-token"
 secret   = "file-secret"
 `), 0o600)
 
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", dir)
 	cleanup := setEnv(t,
+		"RATATASKR_CONFIG", filepath.Join(cfgDir, "config.toml"),
 		"PROXMOX_HOST", "https://env-host:8006",
 		"PROXMOX_TOKEN_ID", "",
 		"PROXMOX_SECRET", "",
 	)
-	defer func() {
-		os.Setenv("HOME", origHome)
-		cleanup()
-	}()
+	defer cleanup()
 
 	cfg, err := Load()
 	if err != nil {

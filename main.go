@@ -18,32 +18,34 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load()
+	cfg, err := loadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Overlay keyring values for credentials not set in config/env.
-	gkr.Overlay(&cfg.Secret, gkr.KeyProxmoxSecret)
-	gkr.Overlay(&cfg.Salt.Password, gkr.KeySaltPassword)
-	gkr.Overlay(&cfg.Nomad.Token, gkr.KeyNomadToken)
-	gkr.Overlay(&cfg.Wazuh.Password, gkr.KeyWazuhPassword)
-	gkr.Overlay(&cfg.CrowdSec.APIKey, gkr.KeyCrowdSecAPIKey)
-	gkr.Overlay(&cfg.Matchbox.Token, gkr.KeyMatchboxToken)
-	gkr.Overlay(&cfg.Technitium.Token, gkr.KeyTechnitiumToken)
-	gkr.Overlay(&cfg.Prometheus.Token, gkr.KeyPrometheusToken)
-	gkr.Overlay(&cfg.Claude.APIKey, gkr.KeyAnthropicAPIKey)
-	gkr.Overlay(&cfg.TrueNAS.APIKey, gkr.KeyTrueNASAPIKey)
-	gkr.Overlay(&cfg.Plex.Token, gkr.KeyPlexToken)
-	gkr.Overlay(&cfg.Loki.Token, gkr.KeyLokiToken)
-	gkr.Overlay(&cfg.HomeAssistant.Token, gkr.KeyHAToken)
-	sshPassword, _ := gkr.Load(gkr.KeySSHPassword)
-
-	if err := cfg.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
-		os.Exit(1)
+	// First-run setup: show the Proxmox config screen instead of bailing out.
+	if verr := cfg.Validate(); verr != nil {
+		done, err := ui.RunSetup(verr.Error())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "setup error: %v\n", err)
+			os.Exit(1)
+		}
+		if !done {
+			fmt.Fprintln(os.Stderr, "setup aborted")
+			os.Exit(1)
+		}
+		if cfg, err = loadConfig(); err != nil {
+			fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := cfg.Validate(); err != nil {
+			fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+			os.Exit(1)
+		}
 	}
+
+	sshPassword, _ := gkr.Load(gkr.KeySSHPassword)
 
 	proxmoxClient := api.NewClient(cfg)
 
@@ -120,6 +122,29 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// loadConfig loads config from file/env and overlays keyring credentials.
+func loadConfig() (*config.Config, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	gkr.Overlay(&cfg.Secret, gkr.KeyProxmoxSecret)
+	gkr.Overlay(&cfg.Password, gkr.KeyProxmoxPassword)
+	gkr.Overlay(&cfg.Salt.Password, gkr.KeySaltPassword)
+	gkr.Overlay(&cfg.Nomad.Token, gkr.KeyNomadToken)
+	gkr.Overlay(&cfg.Wazuh.Password, gkr.KeyWazuhPassword)
+	gkr.Overlay(&cfg.CrowdSec.APIKey, gkr.KeyCrowdSecAPIKey)
+	gkr.Overlay(&cfg.Matchbox.Token, gkr.KeyMatchboxToken)
+	gkr.Overlay(&cfg.Technitium.Token, gkr.KeyTechnitiumToken)
+	gkr.Overlay(&cfg.Prometheus.Token, gkr.KeyPrometheusToken)
+	gkr.Overlay(&cfg.Claude.APIKey, gkr.KeyAnthropicAPIKey)
+	gkr.Overlay(&cfg.TrueNAS.APIKey, gkr.KeyTrueNASAPIKey)
+	gkr.Overlay(&cfg.Plex.Token, gkr.KeyPlexToken)
+	gkr.Overlay(&cfg.Loki.Token, gkr.KeyLokiToken)
+	gkr.Overlay(&cfg.HomeAssistant.Token, gkr.KeyHAToken)
+	return cfg, nil
 }
 
 // startMetricsServer runs an embedded Prometheus metrics HTTP server.

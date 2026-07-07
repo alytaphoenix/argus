@@ -66,7 +66,9 @@ func (c *Client) CloneVM(ctx context.Context, opts CloneOptions) (string, error)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", c.authHeader())
+	if err := c.setAuth(ctx, req); err != nil {
+		return "", err
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
@@ -128,7 +130,9 @@ func (c *Client) SetCloudInit(ctx context.Context, node string, vmid int, opts C
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", c.authHeader())
+	if err := c.setAuth(ctx, req); err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)

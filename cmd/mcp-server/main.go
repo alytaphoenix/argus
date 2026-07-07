@@ -1494,6 +1494,7 @@ func main() {
 
 func overlayKeyring(cfg *config.Config) {
 	gkr.Overlay(&cfg.Secret, gkr.KeyProxmoxSecret)
+	gkr.Overlay(&cfg.Password, gkr.KeyProxmoxPassword)
 	gkr.Overlay(&cfg.Salt.Password, gkr.KeySaltPassword)
 	gkr.Overlay(&cfg.Nomad.Token, gkr.KeyNomadToken)
 	gkr.Overlay(&cfg.Wazuh.Password, gkr.KeyWazuhPassword)

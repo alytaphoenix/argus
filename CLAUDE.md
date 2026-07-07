@@ -51,7 +51,7 @@ independent of which screen is open.
 **Packages:**
 
 - `config/` — loads `~/.config/ratataskr/config.toml` or env vars. `[salt]`, `[nomad]`, `[plex]`, `[servarr.*]`, `[homeassistant]`, `[loki]` are optional; omitting them disables those screens/features.
-- `api/client.go` — Proxmox HTTP client, `PVEAPIToken` header auth, response unwrapper (`{"data": ...}`).
+- `api/client.go` — Proxmox HTTP client, response unwrapper (`{"data": ...}`). Two auth modes: `PVEAPIToken` header (token_id/secret) or PVE ticket auth (username/password → `PVEAuthCookie` + `CSRFPreventionToken` on writes, re-login before the 2h ticket expiry). Username set = ticket auth wins.
 - `api/proxmox.go` — `Nodes`, `Guests` (merges qemu+lxc sorted by VMID), `GuestAction`, `GuestStatus`, `NodeVersion`, `Snapshots`, `CreateSnapshot`, `DeleteSnapshot`, `HAResources`, `MigrateHAResourcesOffNode`, `NodeAPTUpdate`, `WaitForTask`, `NodeReboot`.
 - `api/salt.go` — session login → `X-Auth-Token`, auto-refreshed via `ensureToken` when the cached token nears expiry (salt-api tokens expire, default 12h). `Minions` = GET /minions (cached grains) + live `test.ping`. `ApplyState` uses `local_async` (returns JID immediately). `JobResult`, `JournalLogs` (rejects unsafe unit names), `JobsForMinion`, `WriteFile` (rejects paths with quotes/newlines), `RunCmd` (cmd.run on a target).
 - `api/nomad.go` — `NomadClient` with `X-Nomad-Token` (optional ACL). `Jobs` (GET /jobs?meta=true with summaries), `JobAllocations`, `StopJob` (DELETE /job/{id}). `NomadJob.Totals()` sums running/failed/lost across task groups.
@@ -76,7 +76,7 @@ independent of which screen is open.
 - `ui/services_truenas.go` — TrueNAS tab (pools, alerts, services).
 - `ui/services_ha.go` — Home Assistant tab (entity list, lazy-loaded on first visit).
 - `db/db.go` — SQLite WAL mode. Migrations run as sequential `CREATE TABLE IF NOT EXISTS` / `ALTER` blocks at open (not strictly version-ordered in source); the destructive v16 certificates rebuild is guarded by `PRAGMA user_version`. Tables: `cloud_init_profiles`, `salt_profiles`, `provisioned_vms`, `salt_apply_events`, `nomad_job_snapshots`, `nomad_job_events`, `services`, `service_health_checks`, `certificates`, `dns_records_cache`, `vm_resize_events`, `pxe_profiles`, `pxe_groups`, `pxe_boot_events`, `security_events`, `service_hosts`, `node_ssh_credentials`, `scan_results`, `app_settings`, `node_metrics_history`, `service_uptime_events`, `runbooks`, `runbook_runs`, `alert_routes`, `vm_lifecycle_policies`, `maintenance_schedules`, `maintenance_runs`, `maintenance_run_steps`.
-- `keyring/` — macOS Keychain via `github.com/zalando/go-keyring`. Keys: `proxmox_secret`, `salt_password`, `nomad_token`, `ssh_password`, `wazuh_password`, `crowdsec_api_key`, `matchbox_token`, `technitium_token`, `prometheus_token`, `anthropic_api_key`, `truenas_api_key`, `plex_token`, `homeassistant_token`, `loki_token`.
+- `keyring/` — macOS Keychain via `github.com/zalando/go-keyring`. Keys: `proxmox_secret`, `proxmox_password`, `salt_password`, `nomad_token`, `ssh_password`, `wazuh_password`, `crowdsec_api_key`, `matchbox_token`, `technitium_token`, `prometheus_token`, `anthropic_api_key`, `truenas_api_key`, `plex_token`, `homeassistant_token`, `loki_token`.
 - `cmd/mcp-server/` — MCP stdio server exposing all integrations as tools for Claude/Hermes agents. Build separately with `go build ./cmd/mcp-server/`. Register with `claude mcp add ratataskr -- /path/to/ratataskr-mcp-server`.
 
 **Sub-model pattern:** Each screen model has `Update(msg tea.Msg) (ConcreteType, tea.Cmd)` — returns its own type so `App` can reassign struct fields directly. Navigation is emitted as a `tea.Cmd` returning a typed message.
@@ -156,9 +156,9 @@ Credentials are loaded from config.toml first, then overlaid from the macOS Keyc
 
 ## Configuration
 
-Copy `config.toml.example` to `~/.config/ratataskr/config.toml`. All sections except `[host]`/`[token_id]`/`[secret]` are optional.
+Copy `config.toml.example` to `~/.config/ratataskr/config.toml`, or just run `ratataskr` — with no working Proxmox config it shows a first-run setup screen (`ui/setup.go`) that tests the connection, writes a minimal config, and stores the password in the Keychain (`proxmox_password`). All sections beyond the Proxmox connection are optional; the orchestrator introspects the cluster at runtime. `RATATASKR_CONFIG` env var overrides the config file path.
 
-- Proxmox token: Datacenter → Permissions → API Tokens. Needs `VM.PowerMgmt` + `VM.Monitor` on `/vms/*`.
+- Proxmox auth: either API token (`token_id`/`secret`; Datacenter → Permissions → API Tokens, needs `VM.PowerMgmt` + `VM.Monitor` on `/vms/*`) or ticket auth (`username`/`password`, e.g. `root@pam`).
 - Salt API: requires `salt-api` with CherryPy. User needs `test.ping`, `state.apply`, `grains.item` on `*`.
 - Nomad: default port 4646, no TLS in dev; ACL token optional.
 - Plex token: visit https://support.plex.tv/articles/204059436 or use Plex Web developer tools. Store in Keychain via Keys screen (key: `plex_token`).
@@ -176,7 +176,9 @@ Key test files:
 - `api/plex_test.go` — PlexClient and ServarrClient HTTP tests (httptest server)
 - `api/scan_test.go` — port scanner tests
 - `db/db_test.go` — migration, CRUD, and settings tests
-- `config/config_test.go` — config load, env override, ApplyGlobals tests
+- `api/client_test.go` — Proxmox ticket + token auth tests (httptest server)
+- `config/config_test.go` — config load, env override, ApplyGlobals, SaveProxmoxSetup tests (isolated from the real config file via `RATATASKR_CONFIG` in `TestMain`)
 - `ui/services_test.go` — serviceSlug, lazyLoadTab guard tests
+- `ui/setup_test.go` — first-run setup model tests
 - `ui/detail_test.go` — snapDeleting/acting flag independence tests
 - `cmd/mcp-server/main_test.go` — helper functions and tool catalogue tests

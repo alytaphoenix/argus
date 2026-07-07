@@ -7,6 +7,7 @@ const service = "ratataskr"
 // Credential keys stored under the "ratataskr" service.
 const (
 	KeyProxmoxSecret   = "proxmox_secret"
+	KeyProxmoxPassword = "proxmox_password"
 	KeySaltPassword    = "salt_password"
 	KeyNomadToken      = "nomad_token"
 	KeySSHPassword     = "ssh_password"
