@@ -21,6 +21,7 @@ const (
 	KeyPlexToken       = "plex_token"
 	KeyHAToken         = "homeassistant_token"
 	KeyLokiToken       = "loki_token"
+	KeyHermesAPIKey    = "hermes_api_key"
 )
 
 // SSHNodeKey returns the keyring key for a per-node SSH password.

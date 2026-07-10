@@ -405,6 +405,106 @@ func (c *SaltClient) JobsForMinion(ctx context.Context, minionID string) ([]Job,
 	return filtered, nil
 }
 
+// SaltKeys holds the key lists returned by wheel key.list_all.
+type SaltKeys struct {
+	Accepted []string
+	Pending  []string
+	Rejected []string
+	Denied   []string
+}
+
+// saltKeyData is the inner struct from wheel key.list_all responses.
+type saltKeyData struct {
+	Minions  []string `json:"minions"`
+	Pre      []string `json:"minions_pre"`
+	Rejected []string `json:"minions_rejected"`
+	Denied   []string `json:"minions_denied"`
+}
+
+func parseKeyData(raw json.RawMessage) *saltKeyData {
+	var kd saltKeyData
+	if err := json.Unmarshal(raw, &kd); err == nil && (len(kd.Minions) > 0 || len(kd.Pre) > 0 || len(kd.Rejected) > 0) {
+		return &kd
+	}
+	// Newer salt-api wraps wheel results: {"data": {"return": {...}}}
+	var wrapper struct {
+		Data struct {
+			Return saltKeyData `json:"return"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &wrapper); err == nil {
+		return &wrapper.Data.Return
+	}
+	return &saltKeyData{}
+}
+
+// ListKeys returns all minion key lists via the Salt wheel client.
+func (c *SaltClient) ListKeys(ctx context.Context) (*SaltKeys, error) {
+	raw, err := c.saltRun(ctx, map[string]interface{}{
+		"client": "wheel",
+		"fun":    "key.list_all",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ListKeys: %w", err)
+	}
+	kd := parseKeyData(raw)
+	return &SaltKeys{
+		Accepted: kd.Minions,
+		Pending:  kd.Pre,
+		Rejected: kd.Rejected,
+		Denied:   kd.Denied,
+	}, nil
+}
+
+// AcceptKey accepts a pending minion key by ID.
+func (c *SaltClient) AcceptKey(ctx context.Context, minionID string) error {
+	_, err := c.saltRun(ctx, map[string]interface{}{
+		"client": "wheel",
+		"fun":    "key.accept",
+		"match":  minionID,
+	})
+	if err != nil {
+		return fmt.Errorf("AcceptKey %s: %w", minionID, err)
+	}
+	return nil
+}
+
+// RejectKey rejects a pending minion key by ID.
+func (c *SaltClient) RejectKey(ctx context.Context, minionID string) error {
+	_, err := c.saltRun(ctx, map[string]interface{}{
+		"client": "wheel",
+		"fun":    "key.reject",
+		"match":  minionID,
+	})
+	if err != nil {
+		return fmt.Errorf("RejectKey %s: %w", minionID, err)
+	}
+	return nil
+}
+
+// DeleteKey deletes a minion key (accepted or rejected) by ID.
+func (c *SaltClient) DeleteKey(ctx context.Context, minionID string) error {
+	_, err := c.saltRun(ctx, map[string]interface{}{
+		"client": "wheel",
+		"fun":    "key.delete",
+		"match":  minionID,
+	})
+	if err != nil {
+		return fmt.Errorf("DeleteKey %s: %w", minionID, err)
+	}
+	return nil
+}
+
+// WritePillar writes a Salt pillar file to the master. name is a relative path
+// within pillarBase (e.g. "ratataskr_cluster" or "ratataskr_profiles/myprofile").
+// The .sls extension is appended automatically.
+func (c *SaltClient) WritePillar(ctx context.Context, masterMinion, pillarBase, name, content string) error {
+	if pillarBase == "" {
+		pillarBase = "/srv/pillar"
+	}
+	return c.WriteFile(ctx, masterMinion, path.Join(pillarBase, name+".sls"), content)
+}
+
 // WriteFile writes content to a file on the named minion using cmd.run + base64.
 // masterMinion must be a minion whose grain id matches the salt-master host.
 // The path must be absolute; its parent directory is created with mkdir -p.

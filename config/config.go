@@ -31,6 +31,7 @@ type Config struct {
 	Servarr    ServarrConfigs   `toml:"servarr"`
 	Loki          LokiConfig          `toml:"loki"`
 	HomeAssistant HomeAssistantConfig `toml:"homeassistant"`
+	Hermes        HermesConfig        `toml:"hermes"`
 }
 
 // PlexConfig configures the Plex Media Server integration.
@@ -138,6 +139,15 @@ type HomeAssistantConfig struct {
 	URL      string `toml:"url"`      // e.g. http://homeassistant.local:8123
 	Token    string `toml:"token"`    // Long-lived access token
 	Insecure bool   `toml:"insecure"` // skip TLS verify for self-signed certs
+}
+
+// HermesConfig configures the Hermes agent integration for AI-powered automation.
+type HermesConfig struct {
+	URL         string `toml:"url"`          // e.g. http://hermes.local:8080
+	APIKey      string `toml:"api_key"`      // Bearer token if auth enabled
+	Insecure    bool   `toml:"insecure"`     // skip TLS verify
+	SaltTarget  string `toml:"salt_target"`  // minion ID where Hermes + signal-cli run
+	SignalPhone string `toml:"signal_phone"` // registered Signal account number, e.g. +15555550100
 }
 
 // LokiConfig configures optional Grafana Loki log browsing in the Metrics screen.

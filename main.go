@@ -88,6 +88,11 @@ func main() {
 		haClient = api.NewHAClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, cfg.HomeAssistant.Insecure)
 	}
 
+	var hermesClient *api.HermesClient
+	if cfg.Hermes.URL != "" {
+		hermesClient = api.NewHermesClient(cfg.Hermes.URL, cfg.Hermes.APIKey, cfg.Hermes.Insecure)
+	}
+
 	// cfg.Globals.SSHUser is always populated by ApplyGlobals (default "alyta").
 	// cfg.Defaults.SSHUser mirrors it unless explicitly set to something else.
 	sshUser := cfg.Globals.SSHUser
@@ -113,7 +118,7 @@ func main() {
 	p := tea.NewProgram(
 		ui.NewApp(proxmoxClient, saltClient, nomadClient, promClient, lokiClient,
 			dnsClient, caClient, claudeClient, matchboxClient, csClient, wazuhClient,
-			trueNASClient, plexClient, haClient,
+			trueNASClient, plexClient, haClient, hermesClient,
 			sshUser, sshPassword, cfg.Defaults, *cfg, database),
 		tea.WithAltScreen(),
 	)
@@ -144,6 +149,7 @@ func loadConfig() (*config.Config, error) {
 	gkr.Overlay(&cfg.Plex.Token, gkr.KeyPlexToken)
 	gkr.Overlay(&cfg.Loki.Token, gkr.KeyLokiToken)
 	gkr.Overlay(&cfg.HomeAssistant.Token, gkr.KeyHAToken)
+	gkr.Overlay(&cfg.Hermes.APIKey, gkr.KeyHermesAPIKey)
 	return cfg, nil
 }
 

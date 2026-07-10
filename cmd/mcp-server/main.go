@@ -133,6 +133,7 @@ type mcpClients struct {
 	salt     *api.SaltClient
 	nomad    *api.NomadClient
 	hass     *api.HAClient
+	hermes   *api.HermesClient
 	prom     *api.PrometheusClient
 	loki     *api.LokiClient
 	truenas  *api.TrueNASClient
@@ -597,6 +598,17 @@ func allTools(c *mcpClients) []toolDef {
 					},
 					Required: []string{"domain", "service"},
 				},
+			},
+		)
+	}
+
+	// ── Hermes ───────────────────────────────────────────────────────────────
+	if c.hermes != nil {
+		tools = append(tools,
+			toolDef{
+				Name:        "hermes_status",
+				Description: "Get the health and version of the Hermes agent API server.",
+				InputSchema: inputSchema{Type: "object", Properties: map[string]schemaProp{}},
 			},
 		)
 	}
@@ -1316,6 +1328,17 @@ func callTool(name string, args map[string]any, c *mcpClients) (toolResult, erro
 		}
 		return text(msg + "."), nil
 
+	case "hermes_status":
+		if c.hermes == nil {
+			return text(""), fmt.Errorf("Hermes not configured")
+		}
+		status, err := c.hermes.Status(ctx)
+		if err != nil {
+			return text(""), err
+		}
+		out := fmt.Sprintf("online=%v version=%q gateway=%q", status.Online, status.Version, status.GatewayURL)
+		return text(out), nil
+
 	default:
 		return text(""), fmt.Errorf("unknown tool: %s", name)
 	}
@@ -1422,10 +1445,14 @@ func main() {
 		c.hass = api.NewHAClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, cfg.HomeAssistant.Insecure)
 	}
 
-	log.Printf("started — salt=%v nomad=%v prom=%v loki=%v truenas=%v crowdsec=%v wazuh=%v dns=%v plex=%v servarr=%d ca=%v matchbox=%v hass=%v",
+	if cfg.Hermes.URL != "" {
+		c.hermes = api.NewHermesClient(cfg.Hermes.URL, cfg.Hermes.APIKey, cfg.Hermes.Insecure)
+	}
+
+	log.Printf("started — salt=%v nomad=%v prom=%v loki=%v truenas=%v crowdsec=%v wazuh=%v dns=%v plex=%v servarr=%d ca=%v matchbox=%v hass=%v hermes=%v",
 		c.salt != nil, c.nomad != nil, c.prom != nil, c.loki != nil,
 		c.truenas != nil, c.crowdsec != nil, c.wazuh != nil, c.dns != nil,
-		c.plex != nil, len(c.servarr), c.ca != nil, c.matchbox != nil, c.hass != nil)
+		c.plex != nil, len(c.servarr), c.ca != nil, c.matchbox != nil, c.hass != nil, c.hermes != nil)
 
 	enc := json.NewEncoder(os.Stdout)
 	scanner := bufio.NewScanner(os.Stdin)

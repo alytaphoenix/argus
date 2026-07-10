@@ -1,0 +1,1513 @@
+package ui
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/alytaphoenix/ratataskr/api"
+	"github.com/alytaphoenix/ratataskr/config"
+	"github.com/alytaphoenix/ratataskr/db"
+)
+
+// bsvcStatus represents the live check status of one bootstrap service.
+type bsvcStatus int
+
+const (
+	bsvcUnknown       bsvcStatus = iota
+	bsvcChecking                 // check in progress
+	bsvcOK                       // reachable + configured
+	bsvcPartial                  // reachable but not fully set up
+	bsvcMissing                  // not reachable / not deployed
+	bsvcNotConfigured            // not in config.toml
+	bsvcSkipped                  // user skipped
+)
+
+// bootstrapService describes one homelab service in the bootstrap order.
+type bootstrapService struct {
+	id          string
+	name        string
+	description string
+	status      bsvcStatus
+	detail      string // human-readable status detail
+	errMsg      string
+	provisioning bool // Salt apply in progress
+	ingesting    bool // ingest in progress
+}
+
+// orchBootstrapActionDialog is the action menu shown when user presses enter on a service.
+type orchBootstrapActionDialog struct {
+	service string
+	status  bsvcStatus
+	opts    []string
+	cursor  int
+}
+
+type orchTab int
+
+const (
+	orchTabKeys     orchTab = iota // pending/rejected minion keys
+	orchTabPending                 // VMs awaiting salt apply
+	orchTabPillar                  // cluster pillar entries
+	orchTabBootstrap               // ordered bootstrap steps
+)
+
+var orchTabLabels = []string{"Keys", "Pending", "Pillar", "Bootstrap"}
+
+// orchConfirm holds state for the confirmation dialog shown before key
+// acceptance or rejection.
+type orchConfirm struct {
+	action  string // "accept" or "reject"
+	minion  string
+	profile string // matched salt profile name, or ""
+	vmid    int    // matched provisioned_vm VMID, or 0
+}
+
+// orchPillarForm is the inline form for adding a pillar entry or a bootstrap
+// provision target+state pair.
+type orchPillarForm struct {
+	inputs  []textinput.Model
+	focused int
+}
+
+// OrchestrateModel manages the Salt orchestration screen: key acceptance,
+// pending VM salt applies, cluster pillar management, and bootstrap execution.
+type OrchestrateModel struct {
+	saltClient   *api.SaltClient
+	database     *db.DB
+	saltCfg      config.SaltConfig
+	truenas      *api.TrueNASClient
+	hermesClient *api.HermesClient
+	dnsClient    *api.TechnitiumClient
+	caClient     *api.StepCAClient
+	plexClient   *api.PlexClient
+	cfg          config.Config
+
+	tab     orchTab
+	cursor  int
+	keys    *api.SaltKeys
+	pending []db.ProvisionedVM
+	pillar  []db.ClusterPillarEntry
+
+	acting  bool
+	notice  string
+	err     error
+	confirm *orchConfirm
+	form    *orchPillarForm // pillar tab form
+
+	// Bootstrap tab state
+	bootstrapServices []bootstrapService
+	bsvcActionDialog  *orchBootstrapActionDialog
+	provisionForm     *orchPillarForm // bootstrap provision (target, state)
+	provisioningFor   string          // service id being provisioned
+
+	width, height int
+	spinner       spinner.Model
+}
+
+func NewOrchestrateModel(
+	saltClient *api.SaltClient, database *db.DB, saltCfg config.SaltConfig,
+	truenas *api.TrueNASClient, hermesClient *api.HermesClient, cfg config.Config,
+	dnsClient *api.TechnitiumClient, caClient *api.StepCAClient, plexClient *api.PlexClient,
+) OrchestrateModel {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	return OrchestrateModel{
+		saltClient:        saltClient,
+		database:          database,
+		saltCfg:           saltCfg,
+		truenas:           truenas,
+		hermesClient:      hermesClient,
+		dnsClient:         dnsClient,
+		caClient:          caClient,
+		plexClient:        plexClient,
+		cfg:               cfg,
+		spinner:           s,
+		bootstrapServices: defaultBootstrapServices(),
+	}
+}
+
+func defaultBootstrapServices() []bootstrapService {
+	return []bootstrapService{
+		{id: "dns", name: "DNS (Technitium)", description: "Authoritative DNS for the homelab domain"},
+		{id: "certs", name: "Certificates (step-ca)", description: "Internal CA for TLS certificates"},
+		{id: "truenas", name: "TrueNAS NFS", description: "Network storage — pools, datasets, NFS shares"},
+		{id: "plex", name: "Plex Media Server", description: "Media server with library configuration"},
+		{id: "servarr", name: "Servarr suite", description: "Sonarr/Radarr/Prowlarr and companion apps"},
+		{id: "hermes", name: "Hermes agent", description: "AI automation agent for cluster management"},
+		{id: "signal", name: "Signal CLI", description: "Signal messenger gateway via Hermes"},
+	}
+}
+
+func (m OrchestrateModel) Init() tea.Cmd {
+	return tea.Batch(m.spinner.Tick, m.loadKeysCmd(), m.loadPendingCmd(), m.loadPillarCmd(), m.keyPollTickCmd())
+}
+
+func (m OrchestrateModel) keyPollTickCmd() tea.Cmd {
+	return tea.Tick(30*time.Second, func(time.Time) tea.Msg { return orchKeyTickMsg{} })
+}
+
+func (m OrchestrateModel) loadKeysCmd() tea.Cmd {
+	client := m.saltClient
+	return func() tea.Msg {
+		if client == nil {
+			return orchKeysLoadedMsg{}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		keys, err := client.ListKeys(ctx)
+		return orchKeysLoadedMsg{keys: keys, err: err}
+	}
+}
+
+func (m OrchestrateModel) loadPendingCmd() tea.Cmd {
+	database := m.database
+	return func() tea.Msg {
+		if database == nil {
+			return orchPendingLoadedMsg{}
+		}
+		vms, err := database.PendingSaltVMs()
+		return orchPendingLoadedMsg{vms: vms, err: err}
+	}
+}
+
+func (m OrchestrateModel) loadPillarCmd() tea.Cmd {
+	database := m.database
+	return func() tea.Msg {
+		if database == nil {
+			return orchPillarLoadedMsg{}
+		}
+		entries, err := database.ClusterPillar()
+		return orchPillarLoadedMsg{entries: entries, err: err}
+	}
+}
+
+func (m OrchestrateModel) applyKeyActionCmd(action, minion, profileName string, vmid int) tea.Cmd {
+	saltClient := m.saltClient
+	database := m.database
+	saltCfg := m.saltCfg
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		if action == "accept" {
+			if err := saltClient.AcceptKey(ctx, minion); err != nil {
+				return orchAcceptDoneMsg{minion: minion, action: action, err: err}
+			}
+		} else {
+			if err := saltClient.RejectKey(ctx, minion); err != nil {
+				return orchAcceptDoneMsg{minion: minion, action: action, err: err}
+			}
+			return orchAcceptDoneMsg{minion: minion, action: action}
+		}
+
+		// After accepting: apply profile if matched.
+		if profileName == "" || database == nil {
+			return orchAcceptDoneMsg{minion: minion, action: action}
+		}
+		failed := applySaltProfile(ctx, saltClient, database, saltCfg, minion, profileName, vmid)
+		return orchAcceptDoneMsg{minion: minion, action: action, failedStates: failed}
+	}
+}
+
+func (m OrchestrateModel) applyPendingVMCmd(vm db.ProvisionedVM) tea.Cmd {
+	saltClient := m.saltClient
+	database := m.database
+	saltCfg := m.saltCfg
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		failed := applySaltProfile(ctx, saltClient, database, saltCfg, vm.Name, vm.SaltProfile, vm.VMID)
+		return orchAcceptDoneMsg{minion: vm.Name, action: "apply", failedStates: failed}
+	}
+}
+
+// applySaltProfile writes the per-profile pillar (if any) to the master, then
+// applies each state in the profile to the minion. Updates the DB on success.
+func applySaltProfile(ctx context.Context, saltClient *api.SaltClient, database *db.DB, cfg config.SaltConfig, minion, profileName string, vmid int) (failedStates []string) {
+	if cfg.PillarBase == "" {
+		cfg.PillarBase = "/srv/pillar"
+	}
+
+	profile, err := database.GetSaltProfile(profileName)
+	if err != nil || profile == nil {
+		return []string{"profile not found: " + profileName}
+	}
+
+	// Write per-profile pillar to master if configured.
+	if profile.PillarYAML != "" && cfg.MasterMinion != "" {
+		header := fmt.Sprintf("# managed by ratataskr — profile: %s\n", profile.Name)
+		if wErr := saltClient.WritePillar(ctx, cfg.MasterMinion, cfg.PillarBase,
+			"ratataskr_profiles/"+profile.Name, header+profile.PillarYAML); wErr != nil {
+			failedStates = append(failedStates, "pillar write: "+wErr.Error())
+		}
+	}
+
+	// Apply each comma-separated state sequentially.
+	allStates := strings.Join(strings.Fields(strings.ReplaceAll(profile.States, ",", " ")), ",")
+	var appliedStates []string
+	for _, state := range strings.Split(allStates, ",") {
+		state = strings.TrimSpace(state)
+		if state == "" {
+			continue
+		}
+		jid, applyErr := saltClient.ApplyState(ctx, minion, state)
+		if applyErr != nil {
+			failedStates = append(failedStates, state+": "+applyErr.Error())
+			continue
+		}
+		// Poll for completion (up to 4 minutes, 10s intervals).
+		done := false
+		for range 24 {
+			time.Sleep(10 * time.Second)
+			d, success, failed, pollErr := saltClient.JobResult(ctx, jid)
+			if pollErr != nil {
+				break
+			}
+			if d {
+				done = true
+				if !success {
+					failedStates = append(failedStates, failed...)
+				}
+				break
+			}
+		}
+		if !done {
+			failedStates = append(failedStates, state+": timed out")
+		}
+		appliedStates = append(appliedStates, state)
+	}
+
+	success := len(failedStates) == 0
+	errStr := strings.Join(failedStates, "; ")
+	_, _ = database.RecordSaltApply(db.SaltApplyEvent{
+		Minion:      minion,
+		States:      allStates,
+		SaltProfile: profileName,
+		JID:         "",
+		Success:     success,
+		ErrorMsg:    errStr,
+	})
+
+	if success && vmid > 0 {
+		_ = database.UpdateVMSaltApplied(vmid, profileName)
+		_ = database.SaveServiceHost(db.ServiceHost{
+			Host:        minion,
+			VMID:        vmid,
+			Managed:     true,
+			SaltApplied: true,
+		})
+	}
+	return failedStates
+}
+
+func (m OrchestrateModel) pushClusterPillarCmd() tea.Cmd {
+	saltClient := m.saltClient
+	database := m.database
+	saltCfg := m.saltCfg
+	return func() tea.Msg {
+		if saltCfg.MasterMinion == "" {
+			return orchPillarPushedMsg{err: fmt.Errorf("master_minion not set in [salt] config")}
+		}
+		if saltCfg.PillarBase == "" {
+			saltCfg.PillarBase = "/srv/pillar"
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		yaml, err := database.GenerateClusterPillarYAML()
+		if err != nil {
+			return orchPillarPushedMsg{err: err}
+		}
+		err = saltClient.WritePillar(ctx, saltCfg.MasterMinion, saltCfg.PillarBase, "ratataskr_cluster", yaml)
+		return orchPillarPushedMsg{err: err}
+	}
+}
+
+func (m OrchestrateModel) syncTrueNASCmd() tea.Cmd {
+	truenas := m.truenas
+	database := m.database
+	return func() tea.Msg {
+		if truenas == nil {
+			return orchTrueNASSyncedMsg{err: fmt.Errorf("TrueNAS not configured")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		status, err := truenas.FetchAll(ctx)
+		if err != nil {
+			return orchTrueNASSyncedMsg{err: err}
+		}
+		host := truenas.Host()
+		var sb strings.Builder
+		for _, ds := range status.Datasets {
+			// Sanitize dataset name for YAML key (replace / and - with _).
+			slug := strings.NewReplacer("/", "_", "-", "_").Replace(ds.Name)
+			mountPath := "/mnt/" + ds.Name
+			sb.WriteString(slug + ":\n")
+			sb.WriteString("  nfs_host: " + host + "\n")
+			sb.WriteString("  nfs_export: " + mountPath + "\n")
+			sb.WriteString("  mount_path: " + mountPath + "\n")
+		}
+		if sb.Len() == 0 {
+			return orchTrueNASSyncedMsg{err: fmt.Errorf("no datasets found on TrueNAS")}
+		}
+		err = database.SetClusterPillar("storage", sb.String(), "truenas")
+		return orchTrueNASSyncedMsg{err: err}
+	}
+}
+
+// checkAllServicesCmd runs all bootstrap service checks in parallel.
+func (m OrchestrateModel) checkAllServicesCmd() tea.Cmd {
+	cmds := make([]tea.Cmd, len(m.bootstrapServices))
+	for i, svc := range m.bootstrapServices {
+		cmds[i] = m.checkSvcCmd(svc.id)
+	}
+	return tea.Batch(cmds...)
+}
+
+// checkSvcCmd runs a health check for one bootstrap service.
+func (m OrchestrateModel) checkSvcCmd(id string) tea.Cmd {
+	dns := m.dnsClient
+	ca := m.caClient
+	truenas := m.truenas
+	plex := m.plexClient
+	hermes := m.hermesClient
+	salt := m.saltClient
+	cfg := m.cfg
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		switch id {
+		case "dns":
+			if cfg.Technitium.URL == "" {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "add [technitium] url to config.toml"}
+			}
+			if dns == nil {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "client not initialised"}
+			}
+			zones, err := dns.Zones(ctx)
+			if err != nil {
+				return orchSvcCheckDoneMsg{id: id, status: "missing", detail: "unreachable: " + err.Error()}
+			}
+			if len(zones) == 0 {
+				return orchSvcCheckDoneMsg{id: id, status: "partial", detail: "reachable but 0 zones configured"}
+			}
+			return orchSvcCheckDoneMsg{id: id, status: "ok", detail: fmt.Sprintf("%d zone(s)", len(zones))}
+
+		case "certs":
+			if cfg.StepCA.URL == "" {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "add [stepca] url to config.toml"}
+			}
+			if ca == nil {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "client not initialised"}
+			}
+			h, err := ca.Health(ctx)
+			if err != nil {
+				return orchSvcCheckDoneMsg{id: id, status: "missing", detail: "unreachable: " + err.Error()}
+			}
+			return orchSvcCheckDoneMsg{id: id, status: "ok", detail: h.Status}
+
+		case "truenas":
+			if cfg.TrueNAS.URL == "" {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "add [truenas] url + api_key to config.toml"}
+			}
+			if truenas == nil {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "client not initialised"}
+			}
+			status, err := truenas.FetchAll(ctx)
+			if err != nil {
+				return orchSvcCheckDoneMsg{id: id, status: "missing", detail: "unreachable: " + err.Error()}
+			}
+			detail := fmt.Sprintf("%d pool(s), %d dataset(s)", len(status.Pools), len(status.Datasets))
+			if len(status.Datasets) == 0 {
+				return orchSvcCheckDoneMsg{id: id, status: "partial", detail: detail}
+			}
+			return orchSvcCheckDoneMsg{id: id, status: "ok", detail: detail}
+
+		case "plex":
+			if cfg.Plex.URL == "" {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "add [plex] url to config.toml"}
+			}
+			if plex == nil {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "client not initialised"}
+			}
+			if err := plex.Ping(ctx); err != nil {
+				return orchSvcCheckDoneMsg{id: id, status: "missing", detail: "unreachable: " + err.Error()}
+			}
+			libs, err := plex.Libraries(ctx)
+			if err != nil || len(libs) == 0 {
+				return orchSvcCheckDoneMsg{id: id, status: "partial", detail: "reachable, 0 libraries configured"}
+			}
+			return orchSvcCheckDoneMsg{id: id, status: "ok", detail: fmt.Sprintf("%d librar(ies)", len(libs))}
+
+		case "servarr":
+			apps := servarrAppsFromCfg(cfg)
+			if len(apps) == 0 {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "add [servarr.*] sections to config.toml"}
+			}
+			healthy, total := 0, len(apps)
+			for _, a := range apps {
+				c := api.NewServarrClient(a.url, a.apiKey, a.name, a.insecure)
+				if c.Ping(ctx) == nil {
+					healthy++
+				}
+			}
+			if healthy == 0 {
+				return orchSvcCheckDoneMsg{id: id, status: "missing", detail: fmt.Sprintf("0/%d services reachable", total)}
+			}
+			if healthy < total {
+				return orchSvcCheckDoneMsg{id: id, status: "partial", detail: fmt.Sprintf("%d/%d services healthy", healthy, total)}
+			}
+			return orchSvcCheckDoneMsg{id: id, status: "ok", detail: fmt.Sprintf("%d/%d healthy", healthy, total)}
+
+		case "hermes":
+			if cfg.Hermes.URL == "" {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "add [hermes] url to config.toml"}
+			}
+			if hermes == nil {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "client not initialised"}
+			}
+			status, err := hermes.Status(ctx)
+			if err != nil {
+				return orchSvcCheckDoneMsg{id: id, status: "missing", detail: "unreachable: " + err.Error()}
+			}
+			detail := "online"
+			if status.Version != "" {
+				detail = "v" + status.Version
+			}
+			return orchSvcCheckDoneMsg{id: id, status: "ok", detail: detail}
+
+		case "signal":
+			if cfg.Hermes.SaltTarget == "" {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "add salt_target to [hermes] config"}
+			}
+			if salt == nil {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "Salt not configured"}
+			}
+			out, err := salt.RunCmd(ctx, cfg.Hermes.SaltTarget, "signal-cli --version 2>&1 || echo NOTFOUND")
+			if err != nil || strings.Contains(out, "NOTFOUND") {
+				return orchSvcCheckDoneMsg{id: id, status: "missing", detail: "signal-cli not found on " + cfg.Hermes.SaltTarget}
+			}
+			if cfg.Hermes.SignalPhone == "" {
+				return orchSvcCheckDoneMsg{id: id, status: "partial", detail: strings.TrimSpace(out) + " — no signal_phone in [hermes] config"}
+			}
+			out2, _ := salt.RunCmd(ctx, cfg.Hermes.SaltTarget,
+				"signal-cli -a '"+cfg.Hermes.SignalPhone+"' listAccounts 2>&1 || echo UNREGISTERED")
+			if strings.Contains(out2, "UNREGISTERED") || strings.Contains(out2, "Error") {
+				return orchSvcCheckDoneMsg{id: id, status: "partial", detail: strings.TrimSpace(out) + " installed, not registered"}
+			}
+			return orchSvcCheckDoneMsg{id: id, status: "ok", detail: strings.TrimSpace(out) + " registered"}
+		}
+		return orchSvcCheckDoneMsg{id: id, status: "unknown", detail: "unknown service"}
+	}
+}
+
+// servarrApp is an ephemeral descriptor for checking a servarr service.
+type servarrApp struct {
+	name, url, apiKey string
+	insecure          bool
+}
+
+// servarrAppsFromCfg returns all configured *arr services with their URLs.
+func servarrAppsFromCfg(cfg config.Config) []servarrApp {
+	var apps []servarrApp
+	add := func(name, url, key string, insecure bool) {
+		if url != "" {
+			apps = append(apps, servarrApp{name, url, key, insecure})
+		}
+	}
+	s := cfg.Servarr
+	add("sonarr", s.Sonarr.URL, s.Sonarr.APIKey, s.Sonarr.Insecure)
+	add("radarr", s.Radarr.URL, s.Radarr.APIKey, s.Radarr.Insecure)
+	add("lidarr", s.Lidarr.URL, s.Lidarr.APIKey, s.Lidarr.Insecure)
+	add("readarr", s.Readarr.URL, s.Readarr.APIKey, s.Readarr.Insecure)
+	add("prowlarr", s.Prowlarr.URL, s.Prowlarr.APIKey, s.Prowlarr.Insecure)
+	add("bazarr", s.Bazarr.URL, s.Bazarr.APIKey, s.Bazarr.Insecure)
+	add("overseerr", s.Overseerr.URL, s.Overseerr.APIKey, s.Overseerr.Insecure)
+	add("tautulli", s.Tautulli.URL, s.Tautulli.APIKey, s.Tautulli.Insecure)
+	return apps
+}
+
+// ingestSvcCmd wires up an already-running service: pulls its config into the
+// DB and marks it managed in service_hosts.
+func (m OrchestrateModel) ingestSvcCmd(id string) tea.Cmd {
+	dns := m.dnsClient
+	truenas := m.truenas
+	plex := m.plexClient
+	database := m.database
+	cfg := m.cfg
+	salt := m.saltClient
+	saltCfg := m.saltCfg
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		switch id {
+		case "dns":
+			if dns == nil || database == nil {
+				return orchSvcIngestDoneMsg{id: id, err: fmt.Errorf("dns client or database unavailable")}
+			}
+			zones, err := dns.Zones(ctx)
+			if err != nil {
+				return orchSvcIngestDoneMsg{id: id, err: err}
+			}
+			_ = database.SaveServiceHost(db.ServiceHost{Host: hostFromURL(cfg.Technitium.URL), Managed: true})
+			return orchSvcIngestDoneMsg{id: id, notice: fmt.Sprintf("DNS wired — %d zones ingested", len(zones))}
+
+		case "certs":
+			if database == nil {
+				return orchSvcIngestDoneMsg{id: id, err: fmt.Errorf("database unavailable")}
+			}
+			_ = database.SaveServiceHost(db.ServiceHost{Host: hostFromURL(cfg.StepCA.URL), Managed: true})
+			return orchSvcIngestDoneMsg{id: id, notice: "step-ca wired as managed service"}
+
+		case "truenas":
+			if truenas == nil {
+				return orchSvcIngestDoneMsg{id: id, err: fmt.Errorf("truenas client unavailable")}
+			}
+			// Delegate to the existing TrueNAS sync + pillar push.
+			status, err := truenas.FetchAll(ctx)
+			if err != nil {
+				return orchSvcIngestDoneMsg{id: id, err: err}
+			}
+			host := truenas.Host()
+			var sb strings.Builder
+			for _, ds := range status.Datasets {
+				slug := strings.NewReplacer("/", "_", "-", "_").Replace(ds.Name)
+				mp := "/mnt/" + ds.Name
+				sb.WriteString(slug + ":\n  nfs_host: " + host + "\n  nfs_export: " + mp + "\n  mount_path: " + mp + "\n")
+			}
+			if sb.Len() > 0 && database != nil {
+				_ = database.SetClusterPillar("storage", sb.String(), "truenas")
+			}
+			_ = database.SaveServiceHost(db.ServiceHost{Host: host, Managed: true})
+			return orchSvcIngestDoneMsg{id: id, notice: fmt.Sprintf("TrueNAS wired — %d dataset(s) ingested to cluster pillar", len(status.Datasets))}
+
+		case "plex":
+			if plex == nil || database == nil {
+				return orchSvcIngestDoneMsg{id: id, err: fmt.Errorf("plex client or database unavailable")}
+			}
+			libs, err := plex.Libraries(ctx)
+			if err != nil {
+				return orchSvcIngestDoneMsg{id: id, err: err}
+			}
+			var paths []string
+			for _, l := range libs {
+				for _, loc := range l.Locations {
+					paths = append(paths, loc.Path)
+				}
+			}
+			if len(paths) > 0 {
+				_ = database.SetClusterPillar("plex.library_paths", strings.Join(paths, "\n"), "plex")
+			}
+			_ = database.SaveServiceHost(db.ServiceHost{Host: hostFromURL(cfg.Plex.URL), Managed: true})
+			return orchSvcIngestDoneMsg{id: id, notice: fmt.Sprintf("Plex wired — %d librar(ies), %d path(s) ingested", len(libs), len(paths))}
+
+		case "servarr":
+			if database == nil {
+				return orchSvcIngestDoneMsg{id: id, err: fmt.Errorf("database unavailable")}
+			}
+			apps := servarrAppsFromCfg(cfg)
+			wired := 0
+			for _, a := range apps {
+				_ = database.SaveServiceHost(db.ServiceHost{Host: hostFromURL(a.url), Managed: true})
+				wired++
+			}
+			return orchSvcIngestDoneMsg{id: id, notice: fmt.Sprintf("%d servarr service(s) wired", wired)}
+
+		case "hermes":
+			if database == nil {
+				return orchSvcIngestDoneMsg{id: id, err: fmt.Errorf("database unavailable")}
+			}
+			_ = database.SaveServiceHost(db.ServiceHost{Host: hostFromURL(cfg.Hermes.URL), Managed: true})
+			return orchSvcIngestDoneMsg{id: id, notice: "Hermes agent wired as managed service"}
+
+		case "signal":
+			if salt == nil || database == nil {
+				return orchSvcIngestDoneMsg{id: id, err: fmt.Errorf("salt or database unavailable")}
+			}
+			// Write the signal gateway config to cluster pillar so other states can reference it.
+			gatewayYAML := "gateway_url: http://127.0.0.1:7583\n"
+			if cfg.Hermes.SignalPhone != "" {
+				gatewayYAML += "signal_phone: " + cfg.Hermes.SignalPhone + "\n"
+			}
+			_ = database.SetClusterPillar("hermes.signal_gateway", gatewayYAML, "signal")
+			// Push the updated pillar to the Salt master.
+			if saltCfg.MasterMinion != "" {
+				if saltCfg.PillarBase == "" {
+					saltCfg.PillarBase = "/srv/pillar"
+				}
+				pctx, pcancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer pcancel()
+				yaml, err := database.GenerateClusterPillarYAML()
+				if err == nil {
+					_ = salt.WritePillar(pctx, saltCfg.MasterMinion, saltCfg.PillarBase, "ratataskr_cluster", yaml)
+				}
+			}
+			return orchSvcIngestDoneMsg{id: id, notice: "Signal CLI gateway config wired into cluster pillar"}
+		}
+		return orchSvcIngestDoneMsg{id: id, err: fmt.Errorf("unknown service: %s", id)}
+	}
+}
+
+// provisionSvcCmd runs a Salt state.apply to deploy a missing service.
+func (m OrchestrateModel) provisionSvcCmd(id, target, state string) tea.Cmd {
+	salt := m.saltClient
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		jid, err := salt.ApplyState(ctx, target, state)
+		if err != nil {
+			return orchSvcProvisionDoneMsg{id: id, err: err}
+		}
+		for range 24 {
+			time.Sleep(10 * time.Second)
+			done, success, failed, pollErr := salt.JobResult(ctx, jid)
+			if pollErr != nil {
+				return orchSvcProvisionDoneMsg{id: id, err: pollErr}
+			}
+			if done {
+				if !success {
+					return orchSvcProvisionDoneMsg{id: id, failedStates: failed}
+				}
+				return orchSvcProvisionDoneMsg{id: id}
+			}
+		}
+		return orchSvcProvisionDoneMsg{id: id, err: fmt.Errorf("salt apply timed out")}
+	}
+}
+
+// hostFromURL extracts the host portion of a URL for use as a service_host key.
+func hostFromURL(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	s := rawURL
+	if idx := strings.Index(s, "://"); idx >= 0 {
+		s = s[idx+3:]
+	}
+	if idx := strings.IndexAny(s, "/"); idx >= 0 {
+		s = s[:idx]
+	}
+	if idx := strings.LastIndex(s, ":"); idx >= 0 {
+		s = s[:idx]
+	}
+	return s
+}
+
+func (m OrchestrateModel) Update(msg tea.Msg) (OrchestrateModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+
+	case orchKeyTickMsg:
+		return m, tea.Batch(m.loadKeysCmd(), m.keyPollTickCmd())
+
+	case orchKeysLoadedMsg:
+		m.acting = false
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.err = nil
+			m.keys = msg.keys
+		}
+		return m, nil
+
+	case orchPendingLoadedMsg:
+		if msg.err == nil {
+			m.pending = msg.vms
+		}
+		return m, nil
+
+	case orchPillarLoadedMsg:
+		if msg.err == nil {
+			m.pillar = msg.entries
+		}
+		return m, nil
+
+	case orchAcceptDoneMsg:
+		m.acting = false
+		m.confirm = nil
+		if msg.err != nil {
+			m.err = msg.err
+		} else if len(msg.failedStates) > 0 {
+			m.err = fmt.Errorf("%s: failed states: %s", msg.minion, strings.Join(msg.failedStates, ", "))
+		} else {
+			m.notice = fmt.Sprintf("%s: %s done", msg.action, msg.minion)
+		}
+		return m, tea.Batch(m.loadKeysCmd(), m.loadPendingCmd())
+
+	case orchPillarPushedMsg:
+		m.acting = false
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.notice = "cluster pillar pushed to master"
+		}
+		return m, nil
+
+	case orchTrueNASSyncedMsg:
+		m.acting = false
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.notice = "TrueNAS datasets synced to cluster pillar"
+		}
+		return m, m.loadPillarCmd()
+
+	case orchBootstrapCheckMsg:
+		for i := range m.bootstrapServices {
+			m.bootstrapServices[i].status = bsvcChecking
+			m.bootstrapServices[i].detail = ""
+			m.bootstrapServices[i].errMsg = ""
+		}
+		m.notice = "checking all services..."
+		return m, m.checkAllServicesCmd()
+
+	case orchSvcCheckDoneMsg:
+		for i, svc := range m.bootstrapServices {
+			if svc.id != msg.id {
+				continue
+			}
+			switch msg.status {
+			case "ok":
+				m.bootstrapServices[i].status = bsvcOK
+			case "partial":
+				m.bootstrapServices[i].status = bsvcPartial
+			case "missing":
+				m.bootstrapServices[i].status = bsvcMissing
+			case "notconfigured":
+				m.bootstrapServices[i].status = bsvcNotConfigured
+			default:
+				m.bootstrapServices[i].status = bsvcUnknown
+			}
+			m.bootstrapServices[i].detail = msg.detail
+			if msg.err != nil {
+				m.bootstrapServices[i].errMsg = msg.err.Error()
+			}
+			break
+		}
+		m.notice = ""
+		return m, nil
+
+	case orchSvcIngestDoneMsg:
+		for i, svc := range m.bootstrapServices {
+			if svc.id == msg.id {
+				m.bootstrapServices[i].ingesting = false
+				break
+			}
+		}
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.notice = msg.notice
+		}
+		return m, m.checkSvcCmd(msg.id)
+
+	case orchSvcProvisionDoneMsg:
+		for i, svc := range m.bootstrapServices {
+			if svc.id == msg.id {
+				m.bootstrapServices[i].provisioning = false
+				break
+			}
+		}
+		m.provisioningFor = ""
+		if msg.err != nil {
+			m.err = msg.err
+		} else if len(msg.failedStates) > 0 {
+			m.err = fmt.Errorf("provision %s: failed: %s", msg.id, strings.Join(msg.failedStates, ", "))
+		} else {
+			m.notice = msg.id + " provisioned — re-checking..."
+		}
+		return m, m.checkSvcCmd(msg.id)
+
+	case tea.KeyMsg:
+		return m.handleKey(msg)
+	}
+	return m, nil
+}
+
+func (m OrchestrateModel) handleKey(msg tea.KeyMsg) (OrchestrateModel, tea.Cmd) {
+	// Bootstrap provision form (target + state entry).
+	if m.provisionForm != nil {
+		return m.handleProvisionForm(msg)
+	}
+
+	// Bootstrap action dialog.
+	if m.bsvcActionDialog != nil {
+		return m.handleBootstrapActionDialog(msg)
+	}
+
+	// Pillar form input mode.
+	if m.form != nil {
+		return m.handlePillarForm(msg)
+	}
+
+	// Confirmation dialog.
+	if m.confirm != nil {
+		switch msg.String() {
+		case "y", "enter":
+			if m.acting {
+				return m, nil
+			}
+			m.acting = true
+			c := m.confirm
+			return m, m.applyKeyActionCmd(c.action, c.minion, c.profile, c.vmid)
+		case "n", "esc":
+			m.confirm = nil
+		}
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc", "b":
+		return m, func() tea.Msg { return backMsg{} }
+	case "right", "l":
+		m.tab = (m.tab + 1) % orchTab(len(orchTabLabels))
+		m.cursor = 0
+		m.notice, m.err = "", nil
+	case "left", "h":
+		m.tab = (m.tab + orchTab(len(orchTabLabels)) - 1) % orchTab(len(orchTabLabels))
+		m.cursor = 0
+		m.notice, m.err = "", nil
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < m.currentListLen()-1 {
+			m.cursor++
+		}
+	case "R":
+		m.notice = "refreshing..."
+		return m, tea.Batch(m.loadKeysCmd(), m.loadPendingCmd(), m.loadPillarCmd())
+
+	// Keys tab actions
+	case "a":
+		if m.tab == orchTabKeys && m.keys != nil && m.cursor < len(m.keys.Pending) {
+			minion := m.keys.Pending[m.cursor]
+			profile, vmid := m.matchMinion(minion)
+			m.confirm = &orchConfirm{action: "accept", minion: minion, profile: profile, vmid: vmid}
+		}
+	case "r":
+		if m.tab == orchTabKeys && m.keys != nil && m.cursor < len(m.keys.Pending) {
+			minion := m.keys.Pending[m.cursor]
+			m.confirm = &orchConfirm{action: "reject", minion: minion}
+		}
+
+	// Bootstrap tab actions
+	case "x":
+		if m.tab == orchTabBootstrap {
+			return m, func() tea.Msg { return orchBootstrapCheckMsg{} }
+		}
+	case "enter":
+		if m.tab == orchTabBootstrap && m.cursor < len(m.bootstrapServices) {
+			svc := m.bootstrapServices[m.cursor]
+			switch svc.status {
+			case bsvcNotConfigured:
+				m.notice = "Add configuration for " + svc.name + " to config.toml first"
+			case bsvcMissing:
+				m.bsvcActionDialog = &orchBootstrapActionDialog{
+					service: svc.id,
+					status:  svc.status,
+					opts:    []string{"Provision via Salt", "Skip"},
+				}
+			case bsvcPartial:
+				m.bsvcActionDialog = &orchBootstrapActionDialog{
+					service: svc.id,
+					status:  svc.status,
+					opts:    []string{"Wire up what exists", "Reprovision via Salt", "Skip"},
+				}
+			case bsvcOK:
+				m.bsvcActionDialog = &orchBootstrapActionDialog{
+					service: svc.id,
+					status:  svc.status,
+					opts:    []string{"Ingest / wire up", "Skip"},
+				}
+			case bsvcUnknown, bsvcChecking:
+				return m, m.checkSvcCmd(svc.id)
+			case bsvcSkipped:
+				m.bootstrapServices[m.cursor].status = bsvcUnknown
+				return m, m.checkSvcCmd(svc.id)
+			}
+		}
+	case "s":
+		if m.tab == orchTabBootstrap && m.cursor < len(m.bootstrapServices) {
+			m.bootstrapServices[m.cursor].status = bsvcSkipped
+			m.bootstrapServices[m.cursor].detail = "skipped by operator"
+		} else if m.tab == orchTabPending && m.cursor < len(m.pending) && !m.acting {
+			vm := m.pending[m.cursor]
+			m.acting = true
+			m.notice = fmt.Sprintf("applying %s to %s...", vm.SaltProfile, vm.Name)
+			return m, m.applyPendingVMCmd(vm)
+		}
+
+	// Pillar tab actions
+	case "t":
+		if m.tab == orchTabPillar && !m.acting {
+			m.acting = true
+			m.notice = "syncing TrueNAS datasets..."
+			return m, m.syncTrueNASCmd()
+		}
+	case "p":
+		if m.tab == orchTabPillar && !m.acting {
+			m.acting = true
+			m.notice = "pushing cluster pillar to master..."
+			return m, m.pushClusterPillarCmd()
+		}
+	case "n":
+		if m.tab == orchTabPillar {
+			m.form = newPillarForm("", "", "manual")
+		}
+	case "d":
+		if m.tab == orchTabPillar && m.cursor < len(m.pillar) {
+			if err := m.database.DeleteClusterPillarKey(m.pillar[m.cursor].Key); err != nil {
+				m.err = err
+			} else {
+				m.notice = "deleted " + m.pillar[m.cursor].Key
+				if m.cursor > 0 {
+					m.cursor--
+				}
+			}
+			return m, m.loadPillarCmd()
+		}
+	}
+	return m, nil
+}
+
+func (m OrchestrateModel) handlePillarForm(msg tea.KeyMsg) (OrchestrateModel, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+s", "enter":
+		if m.form.focused == len(m.form.inputs)-1 || msg.String() == "ctrl+s" {
+			key := strings.TrimSpace(m.form.inputs[0].Value())
+			val := strings.TrimSpace(m.form.inputs[1].Value())
+			src := strings.TrimSpace(m.form.inputs[2].Value())
+			if src == "" {
+				src = "manual"
+			}
+			if key != "" {
+				if err := m.database.SetClusterPillar(key, val, src); err != nil {
+					m.err = err
+				} else {
+					m.notice = "saved pillar key " + key
+				}
+			}
+			m.form = nil
+			return m, m.loadPillarCmd()
+		}
+		// Tab to next field on enter (not last field).
+		m.form.inputs[m.form.focused].Blur()
+		m.form.focused = (m.form.focused + 1) % len(m.form.inputs)
+		m.form.inputs[m.form.focused].Focus()
+		return m, textinput.Blink
+	case "esc":
+		m.form = nil
+		return m, nil
+	case "tab":
+		m.form.inputs[m.form.focused].Blur()
+		m.form.focused = (m.form.focused + 1) % len(m.form.inputs)
+		m.form.inputs[m.form.focused].Focus()
+		return m, textinput.Blink
+	case "shift+tab":
+		m.form.inputs[m.form.focused].Blur()
+		m.form.focused = (m.form.focused - 1 + len(m.form.inputs)) % len(m.form.inputs)
+		m.form.inputs[m.form.focused].Focus()
+		return m, textinput.Blink
+	}
+	var cmd tea.Cmd
+	m.form.inputs[m.form.focused], cmd = m.form.inputs[m.form.focused].Update(msg)
+	return m, cmd
+}
+
+func (m OrchestrateModel) handleBootstrapActionDialog(msg tea.KeyMsg) (OrchestrateModel, tea.Cmd) {
+	d := m.bsvcActionDialog
+	switch msg.String() {
+	case "up", "k":
+		if d.cursor > 0 {
+			d.cursor--
+		}
+	case "down", "j":
+		if d.cursor < len(d.opts)-1 {
+			d.cursor++
+		}
+	case "enter":
+		opt := d.opts[d.cursor]
+		svcID := d.service
+		m.bsvcActionDialog = nil
+		return m.executeBootstrapAction(svcID, opt)
+	case "esc", "q":
+		m.bsvcActionDialog = nil
+	}
+	return m, nil
+}
+
+func (m OrchestrateModel) executeBootstrapAction(svcID, opt string) (OrchestrateModel, tea.Cmd) {
+	switch {
+	case opt == "Skip":
+		for i, svc := range m.bootstrapServices {
+			if svc.id == svcID {
+				m.bootstrapServices[i].status = bsvcSkipped
+				m.bootstrapServices[i].detail = "skipped by operator"
+				break
+			}
+		}
+	case opt == "Provision via Salt" || opt == "Reprovision via Salt":
+		m.provisionForm = newProvisionForm("", "services."+svcID)
+		m.provisioningFor = svcID
+	case opt == "Wire up what exists" || opt == "Ingest / wire up":
+		for i, svc := range m.bootstrapServices {
+			if svc.id == svcID {
+				m.bootstrapServices[i].ingesting = true
+				break
+			}
+		}
+		m.notice = "ingesting " + svcID + "..."
+		return m, m.ingestSvcCmd(svcID)
+	}
+	return m, nil
+}
+
+func (m OrchestrateModel) handleProvisionForm(msg tea.KeyMsg) (OrchestrateModel, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+s":
+		return m.submitProvisionForm()
+	case "enter":
+		if m.provisionForm.focused == len(m.provisionForm.inputs)-1 {
+			return m.submitProvisionForm()
+		}
+		m.provisionForm.inputs[m.provisionForm.focused].Blur()
+		m.provisionForm.focused = (m.provisionForm.focused + 1) % len(m.provisionForm.inputs)
+		m.provisionForm.inputs[m.provisionForm.focused].Focus()
+		return m, textinput.Blink
+	case "esc":
+		m.provisionForm = nil
+		m.provisioningFor = ""
+		return m, nil
+	case "tab":
+		m.provisionForm.inputs[m.provisionForm.focused].Blur()
+		m.provisionForm.focused = (m.provisionForm.focused + 1) % len(m.provisionForm.inputs)
+		m.provisionForm.inputs[m.provisionForm.focused].Focus()
+		return m, textinput.Blink
+	case "shift+tab":
+		m.provisionForm.inputs[m.provisionForm.focused].Blur()
+		m.provisionForm.focused = (m.provisionForm.focused - 1 + len(m.provisionForm.inputs)) % len(m.provisionForm.inputs)
+		m.provisionForm.inputs[m.provisionForm.focused].Focus()
+		return m, textinput.Blink
+	}
+	var cmd tea.Cmd
+	m.provisionForm.inputs[m.provisionForm.focused], cmd = m.provisionForm.inputs[m.provisionForm.focused].Update(msg)
+	return m, cmd
+}
+
+func (m OrchestrateModel) submitProvisionForm() (OrchestrateModel, tea.Cmd) {
+	target := strings.TrimSpace(m.provisionForm.inputs[0].Value())
+	state := strings.TrimSpace(m.provisionForm.inputs[1].Value())
+	svcID := m.provisioningFor
+	m.provisionForm = nil
+	m.provisioningFor = ""
+	if target == "" || state == "" {
+		m.err = fmt.Errorf("target and state are required")
+		return m, nil
+	}
+	if m.saltClient == nil {
+		m.err = fmt.Errorf("Salt not configured — cannot provision")
+		return m, nil
+	}
+	for i, svc := range m.bootstrapServices {
+		if svc.id == svcID {
+			m.bootstrapServices[i].provisioning = true
+			break
+		}
+	}
+	m.notice = fmt.Sprintf("provisioning %s via salt '%s' state.apply %s ...", svcID, target, state)
+	return m, m.provisionSvcCmd(svcID, target, state)
+}
+
+func newProvisionForm(target, defaultState string) *orchPillarForm {
+	specs := []struct{ placeholder, value string }{
+		{"minion target (e.g. dns-server)", target},
+		{"Salt state (e.g. services.dns)", defaultState},
+	}
+	inputs := make([]textinput.Model, len(specs))
+	for i, s := range specs {
+		ti := textinput.New()
+		ti.Placeholder = s.placeholder
+		ti.SetValue(s.value)
+		ti.CharLimit = 256
+		inputs[i] = ti
+	}
+	inputs[0].Focus()
+	return &orchPillarForm{inputs: inputs}
+}
+
+func newPillarForm(key, value, source string) *orchPillarForm {
+	specs := []struct{ placeholder, value string }{
+		{"key (e.g. storage)", key},
+		{"value (YAML block)", value},
+		{"source", source},
+	}
+	inputs := make([]textinput.Model, len(specs))
+	for i, s := range specs {
+		ti := textinput.New()
+		ti.Placeholder = s.placeholder
+		ti.SetValue(s.value)
+		ti.CharLimit = 2048
+		inputs[i] = ti
+	}
+	inputs[0].Focus()
+	return &orchPillarForm{inputs: inputs}
+}
+
+// matchMinion attempts to match a minion ID to a provisioned VM by name.
+// Returns the salt profile name and VMID if matched, empty/"0" if not.
+func (m OrchestrateModel) matchMinion(minionID string) (profile string, vmid int) {
+	for _, vm := range m.pending {
+		if strings.EqualFold(vm.Name, minionID) || strings.EqualFold(vm.VMIP, minionID) {
+			return vm.SaltProfile, vm.VMID
+		}
+	}
+	// Also check already-applied VMs by name.
+	if m.database != nil {
+		if vms, err := m.database.ProvisionedVMs(); err == nil {
+			for _, vm := range vms {
+				if strings.EqualFold(vm.Name, minionID) {
+					return vm.SaltProfile, vm.VMID
+				}
+			}
+		}
+	}
+	return "", 0
+}
+
+func (m OrchestrateModel) currentListLen() int {
+	switch m.tab {
+	case orchTabKeys:
+		if m.keys == nil {
+			return 0
+		}
+		return len(m.keys.Pending) + len(m.keys.Rejected)
+	case orchTabPending:
+		return len(m.pending)
+	case orchTabPillar:
+		return len(m.pillar)
+	case orchTabBootstrap:
+		return len(m.bootstrapServices)
+	}
+	return 0
+}
+
+func (m OrchestrateModel) renderTabBar() string {
+	var parts []string
+	for i, label := range orchTabLabels {
+		l := " " + label + " "
+		if orchTab(i) == m.tab {
+			parts = append(parts, styleTabActive.Render("▸"+l))
+		} else {
+			parts = append(parts, styleTabInactive.Render(" "+l))
+		}
+	}
+	return strings.Join(parts, styleDim.Render("│")) + styleDim.Render("  ←/→ switch")
+}
+
+func (m OrchestrateModel) View() string {
+	title := styleTitle.Render("⚡ ratataskr") + " › " + styleBold.Render("orchestrate")
+	tabs := m.renderTabBar()
+
+	var status string
+	if m.err != nil {
+		status = styleError.Render("✗ " + m.err.Error())
+	} else if m.notice != "" {
+		status = styleRunning.Render("✓ " + m.notice)
+	}
+	if m.acting {
+		status = m.spinner.View() + " " + styleDim.Render(m.notice)
+	}
+	// Show spinner if any bootstrap service is actively checking.
+	if m.tab == orchTabBootstrap && status == "" {
+		for _, svc := range m.bootstrapServices {
+			if svc.status == bsvcChecking || svc.provisioning || svc.ingesting {
+				status = m.spinner.View() + " " + styleDim.Render(m.notice)
+				break
+			}
+		}
+	}
+
+	var body string
+	switch m.tab {
+	case orchTabKeys:
+		body = m.viewKeys()
+	case orchTabPending:
+		body = m.viewPending()
+	case orchTabPillar:
+		body = m.viewPillar()
+	case orchTabBootstrap:
+		body = m.viewBootstrap()
+	}
+
+	if m.confirm != nil {
+		body = m.viewConfirm()
+	}
+	if m.bsvcActionDialog != nil {
+		body = m.viewBootstrapActionDialog()
+	}
+	if m.provisionForm != nil {
+		body = m.viewProvisionForm()
+	}
+
+	var help string
+	switch {
+	case m.bsvcActionDialog != nil:
+		help = styleDim.Render("↑/↓") + " navigate  " + styleDim.Render("enter") + " confirm  " + styleDim.Render("esc") + " cancel"
+	case m.provisionForm != nil:
+		help = styleDim.Render("tab/shift+tab") + " navigate  " + styleDim.Render("ctrl+s") + " provision  " + styleDim.Render("esc") + " cancel"
+	case m.tab == orchTabKeys:
+		help = styleDim.Render("a") + " accept  " + styleDim.Render("r") + " reject  " + styleDim.Render("R") + " refresh  " + styleDim.Render("b") + " back"
+	case m.tab == orchTabPending:
+		help = styleDim.Render("s") + " apply salt  " + styleDim.Render("R") + " refresh  " + styleDim.Render("b") + " back"
+	case m.tab == orchTabPillar:
+		help = styleDim.Render("t") + " sync TrueNAS  " + styleDim.Render("p") + " push to master  " + styleDim.Render("n") + " new  " + styleDim.Render("d") + " delete  " + styleDim.Render("b") + " back"
+	case m.tab == orchTabBootstrap:
+		help = styleDim.Render("x") + " check all  " + styleDim.Render("enter") + " action  " + styleDim.Render("s") + " skip  " + styleDim.Render("b") + " back"
+	}
+
+	parts := []string{title + "\n" + tabs}
+	if status != "" {
+		parts = append(parts, status)
+	}
+	parts = append(parts, body, help)
+	return strings.Join(parts, "\n")
+}
+
+func (m OrchestrateModel) viewKeys() string {
+	if m.keys == nil {
+		return m.spinner.View() + " loading keys..."
+	}
+
+	var sb strings.Builder
+	pending := m.keys.Pending
+	rejected := m.keys.Rejected
+	accepted := m.keys.Accepted
+
+	sb.WriteString(styleBold.Render(fmt.Sprintf("Accepted: %d  Pending: %d  Rejected: %d", len(accepted), len(pending), len(rejected))))
+	sb.WriteString("\n\n")
+
+	if len(pending) == 0 && len(rejected) == 0 {
+		sb.WriteString(styleDim.Render("No pending or rejected keys."))
+		return sb.String()
+	}
+
+	hdr := fmt.Sprintf("%-4s  %-30s  %-12s  %s", "#", "MINION", "STATUS", "PROFILE")
+	sb.WriteString(styleDim.Render(hdr) + "\n")
+
+	idx := 0
+	for _, minion := range pending {
+		profile, _ := m.matchMinion(minion)
+		matchStr := styleDim.Render("-")
+		if profile != "" {
+			matchStr = styleRunning.Render(profile)
+		}
+		row := fmt.Sprintf("%-4d  %-30s  %-12s  %s", idx+1, truncate(minion, 30), "[PENDING]", matchStr)
+		if idx == m.cursor {
+			sb.WriteString(styleSelected.Render(row) + "\n")
+		} else {
+			sb.WriteString(row + "\n")
+		}
+		idx++
+	}
+	for _, minion := range rejected {
+		row := fmt.Sprintf("%-4d  %-30s  %-12s  %s", idx+1, truncate(minion, 30), styleError.Render("[REJECTED]"), styleDim.Render("-"))
+		if idx == m.cursor {
+			sb.WriteString(styleSelected.Render(row) + "\n")
+		} else {
+			sb.WriteString(row + "\n")
+		}
+		idx++
+	}
+
+	return sb.String()
+}
+
+func (m OrchestrateModel) viewPending() string {
+	if len(m.pending) == 0 {
+		return styleDim.Render("No VMs awaiting salt apply. Provision a VM with a salt profile assigned and it will appear here.")
+	}
+	var sb strings.Builder
+	hdr := fmt.Sprintf("%-6s  %-20s  %-15s  %-20s  %s", "VMID", "NAME", "IP", "PROFILE", "PROVISIONED")
+	sb.WriteString(styleDim.Render(hdr) + "\n")
+	for i, vm := range m.pending {
+		ts := vm.ProvisionedAt.Format("2006-01-02 15:04")
+		row := fmt.Sprintf("%-6d  %-20s  %-15s  %-20s  %s",
+			vm.VMID, truncate(vm.Name, 20), truncate(vm.VMIP, 15), truncate(vm.SaltProfile, 20), ts)
+		if i == m.cursor {
+			sb.WriteString(styleSelected.Render(row) + "\n")
+		} else {
+			sb.WriteString(row + "\n")
+		}
+	}
+	return sb.String()
+}
+
+func (m OrchestrateModel) viewPillar() string {
+	if m.form != nil {
+		return m.renderPillarForm()
+	}
+
+	var sb strings.Builder
+
+	// top.sls hint
+	masterMinion := m.saltCfg.MasterMinion
+	if masterMinion == "" {
+		masterMinion = "<master_minion>"
+	}
+	pillarBase := m.saltCfg.PillarBase
+	if pillarBase == "" {
+		pillarBase = "/srv/pillar"
+	}
+	hint := fmt.Sprintf("Add to %s/top.sls:\n  base:\n    '*':\n      - ratataskr_cluster\n    '%s':\n      - ratataskr_profiles/<profile>", pillarBase, masterMinion)
+	sb.WriteString(styleDim.Render(hint) + "\n\n")
+
+	if len(m.pillar) == 0 {
+		sb.WriteString(styleDim.Render("No cluster pillar entries. Press t to sync TrueNAS datasets, or n to add manually."))
+		return sb.String()
+	}
+
+	hdr := fmt.Sprintf("%-25s  %-10s  %s", "KEY", "SOURCE", "UPDATED")
+	sb.WriteString(styleDim.Render(hdr) + "\n")
+	for i, e := range m.pillar {
+		row := fmt.Sprintf("%-25s  %-10s  %s", truncate(e.Key, 25), e.Source, e.UpdatedAt.Format("2006-01-02 15:04"))
+		if i == m.cursor {
+			sb.WriteString(styleSelected.Render(row) + "\n")
+		} else {
+			sb.WriteString(row + "\n")
+		}
+	}
+	return sb.String()
+}
+
+func (m OrchestrateModel) renderPillarForm() string {
+	var sb strings.Builder
+	sb.WriteString(styleBold.Render("New cluster pillar entry") + "\n\n")
+	labels := []string{"Key", "Value", "Source"}
+	for i, inp := range m.form.inputs {
+		label := styleDim.Render(labels[i]+": ")
+		if i == m.form.focused {
+			label = styleBold.Render(labels[i]+": ")
+		}
+		sb.WriteString(label + inp.View() + "\n")
+	}
+	sb.WriteString("\n" + styleDim.Render("tab/shift+tab") + " navigate  " + styleDim.Render("ctrl+s") + " save  " + styleDim.Render("esc") + " cancel")
+	return sb.String()
+}
+
+func bsvcStatusLabel(s bsvcStatus) string {
+	switch s {
+	case bsvcChecking:
+		return styleDim.Render("[CHECK]")
+	case bsvcOK:
+		return styleRunning.Render("[  OK  ]")
+	case bsvcPartial:
+		return styleBold.Render("[PARTL ]")
+	case bsvcMissing:
+		return styleError.Render("[ MISS ]")
+	case bsvcNotConfigured:
+		return styleDim.Render("[CONFIG]")
+	case bsvcSkipped:
+		return styleDim.Render("[SKIP  ]")
+	default:
+		return styleDim.Render("[  ?   ]")
+	}
+}
+
+func (m OrchestrateModel) viewBootstrap() string {
+	var sb strings.Builder
+	sb.WriteString(styleBold.Render("Bootstrap — check and wire up homelab services") + "\n\n")
+
+	hdr := fmt.Sprintf("%-3s  %-9s  %-22s  %s", "#", "STATUS", "SERVICE", "DETAIL")
+	sb.WriteString(styleDim.Render(hdr) + "\n")
+
+	for i, svc := range m.bootstrapServices {
+		statusLabel := bsvcStatusLabel(svc.status)
+		if svc.provisioning || svc.ingesting {
+			statusLabel = m.spinner.View()
+		}
+		detail := svc.detail
+		if svc.errMsg != "" {
+			detail = styleError.Render(svc.errMsg)
+		}
+		row := fmt.Sprintf("%-3d  %s  %-22s  %s", i+1, statusLabel, truncate(svc.name, 22), detail)
+		if i == m.cursor {
+			sb.WriteString(styleSelected.Render(row) + "\n")
+		} else {
+			sb.WriteString(row + "\n")
+		}
+	}
+
+	sb.WriteString("\n" + styleDim.Render("Press x to run all checks. enter to act on selected service."))
+	return sb.String()
+}
+
+func (m OrchestrateModel) viewBootstrapActionDialog() string {
+	d := m.bsvcActionDialog
+	svc := m.bootstrapServiceByID(d.service)
+	var sb strings.Builder
+	sb.WriteString(styleBold.Render("Action: "+svc.name) + " — " + styleDim.Render(svc.detail) + "\n\n")
+	for i, opt := range d.opts {
+		if i == d.cursor {
+			sb.WriteString(styleSelected.Render("► "+opt) + "\n")
+		} else {
+			sb.WriteString("  " + opt + "\n")
+		}
+	}
+	sb.WriteString("\n" + styleDim.Render("↑/↓ navigate  enter confirm  esc cancel"))
+	return sb.String()
+}
+
+func (m OrchestrateModel) viewProvisionForm() string {
+	svcID := m.provisioningFor
+	svc := m.bootstrapServiceByID(svcID)
+	var sb strings.Builder
+	sb.WriteString(styleBold.Render("Provision "+svc.name+" via Salt") + "\n\n")
+	labels := []string{"Target minion", "Salt state   "}
+	for i, inp := range m.provisionForm.inputs {
+		label := styleDim.Render(labels[i]+": ")
+		if i == m.provisionForm.focused {
+			label = styleBold.Render(labels[i]+": ")
+		}
+		sb.WriteString(label + inp.View() + "\n")
+	}
+	sb.WriteString("\n" + styleDim.Render("tab") + " next  " + styleDim.Render("ctrl+s") + " provision  " + styleDim.Render("esc") + " cancel")
+	return sb.String()
+}
+
+func (m OrchestrateModel) bootstrapServiceByID(id string) bootstrapService {
+	for _, svc := range m.bootstrapServices {
+		if svc.id == id {
+			return svc
+		}
+	}
+	return bootstrapService{id: id, name: id}
+}
+
+func (m OrchestrateModel) viewConfirm() string {
+	c := m.confirm
+	var sb strings.Builder
+	sb.WriteString(styleBold.Render(fmt.Sprintf("Confirm %s key", c.action)) + "\n\n")
+	sb.WriteString(fmt.Sprintf("Minion:  %s\n", styleBold.Render(c.minion)))
+	if c.profile != "" {
+		sb.WriteString(fmt.Sprintf("Profile: %s  (pillar + states will be applied)\n", styleRunning.Render(c.profile)))
+	} else {
+		sb.WriteString(styleDim.Render("No matching provisioned VM found — key only, no auto-apply.") + "\n")
+	}
+	sb.WriteString("\n")
+	sb.WriteString(styleBold.Render("y") + " confirm  " + styleDim.Render("n/esc") + " cancel")
+	return sb.String()
+}

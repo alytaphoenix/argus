@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gofmt -d *)",
+      "Bash(gofmt -l *)"
+    ]
+  }
+}

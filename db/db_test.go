@@ -1101,3 +1101,159 @@ func TestScanResultsCRUD(t *testing.T) {
 		t.Errorf("after clear: len = %d, want 0", len(all))
 	}
 }
+
+// ── Cluster pillar tests ────────────────────────────────────────────────────
+
+func TestClusterPillar(t *testing.T) {
+	d := openTestDB(t)
+
+	// Set two entries
+	if err := d.SetClusterPillar("storage", "tank_media:\n  nfs_host: 192.168.1.10\n", "truenas"); err != nil {
+		t.Fatalf("SetClusterPillar: %v", err)
+	}
+	if err := d.SetClusterPillar("dns", "primary: 192.168.1.1\n", "manual"); err != nil {
+		t.Fatalf("SetClusterPillar dns: %v", err)
+	}
+
+	entries, err := d.ClusterPillar()
+	if err != nil {
+		t.Fatalf("ClusterPillar: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("want 2 entries, got %d", len(entries))
+	}
+	// Should be ordered by key (dns before storage)
+	if entries[0].Key != "dns" || entries[1].Key != "storage" {
+		t.Errorf("unexpected order: %v %v", entries[0].Key, entries[1].Key)
+	}
+
+	// Upsert updates
+	if err := d.SetClusterPillar("storage", "tank_updated:\n  nfs_host: 10.0.0.1\n", "truenas"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	entries, _ = d.ClusterPillar()
+	if len(entries) != 2 {
+		t.Fatalf("after upsert: want 2 entries, got %d", len(entries))
+	}
+	storageEntry := entries[1] // storage comes after dns alphabetically
+	if storageEntry.Value != "tank_updated:\n  nfs_host: 10.0.0.1\n" {
+		t.Errorf("unexpected value after upsert: %q", storageEntry.Value)
+	}
+
+	// Delete
+	if err := d.DeleteClusterPillarKey("dns"); err != nil {
+		t.Fatalf("DeleteClusterPillarKey: %v", err)
+	}
+	entries, _ = d.ClusterPillar()
+	if len(entries) != 1 || entries[0].Key != "storage" {
+		t.Errorf("after delete: got %v", entries)
+	}
+}
+
+func TestGenerateClusterPillarYAML(t *testing.T) {
+	d := openTestDB(t)
+
+	yaml, err := d.GenerateClusterPillarYAML()
+	if err != nil {
+		t.Fatalf("empty GenerateClusterPillarYAML: %v", err)
+	}
+	if yaml != "# managed by ratataskr — push from Orchestrate → Pillar\n" {
+		t.Errorf("empty yaml unexpected: %q", yaml)
+	}
+
+	_ = d.SetClusterPillar("storage", "tank_media:\n  nfs_host: 10.0.0.1", "truenas")
+	yaml, err = d.GenerateClusterPillarYAML()
+	if err != nil {
+		t.Fatalf("GenerateClusterPillarYAML: %v", err)
+	}
+	if !contains(yaml, "storage:\n") {
+		t.Errorf("expected storage key in yaml, got:\n%s", yaml)
+	}
+	if !contains(yaml, "  tank_media:") {
+		t.Errorf("expected indented value in yaml, got:\n%s", yaml)
+	}
+}
+
+func TestPendingSaltVMs(t *testing.T) {
+	d := openTestDB(t)
+
+	// No pending VMs initially
+	vms, err := d.PendingSaltVMs()
+	if err != nil {
+		t.Fatalf("PendingSaltVMs: %v", err)
+	}
+	if len(vms) != 0 {
+		t.Fatalf("want 0 pending, got %d", len(vms))
+	}
+
+	// Record a VM with a salt profile but no applied timestamp
+	if err := d.RecordProvisionedVM(ProvisionedVM{
+		VMID: 101, Name: "web01", Node: "pve1",
+		SaltProfile: "webserver",
+	}); err != nil {
+		t.Fatalf("RecordProvisionedVM: %v", err)
+	}
+
+	vms, err = d.PendingSaltVMs()
+	if err != nil {
+		t.Fatalf("PendingSaltVMs after insert: %v", err)
+	}
+	if len(vms) != 1 || vms[0].Name != "web01" {
+		t.Fatalf("want [web01], got %v", vms)
+	}
+
+	// After applying salt, it should disappear
+	if err := d.UpdateVMSaltApplied(101, "webserver"); err != nil {
+		t.Fatalf("UpdateVMSaltApplied: %v", err)
+	}
+	vms, _ = d.PendingSaltVMs()
+	if len(vms) != 0 {
+		t.Errorf("after salt applied: want 0, got %d", len(vms))
+	}
+}
+
+func TestSaltProfilePillarYAML(t *testing.T) {
+	d := openTestDB(t)
+
+	p := SaltProfile{
+		Name:       "webserver",
+		Target:     "web-*",
+		States:     "nginx,firewall",
+		Notes:      "web tier",
+		PillarYAML: "nginx_port: 443\n",
+	}
+	if err := d.SaveSaltProfile(p); err != nil {
+		t.Fatalf("SaveSaltProfile: %v", err)
+	}
+
+	got, err := d.GetSaltProfile("webserver")
+	if err != nil || got == nil {
+		t.Fatalf("GetSaltProfile: %v %v", got, err)
+	}
+	if got.PillarYAML != "nginx_port: 443\n" {
+		t.Errorf("PillarYAML: want %q, got %q", "nginx_port: 443\n", got.PillarYAML)
+	}
+
+	// Update pillar
+	got.PillarYAML = "nginx_port: 80\n"
+	if err := d.SaveSaltProfile(*got); err != nil {
+		t.Fatalf("update SaveSaltProfile: %v", err)
+	}
+	got2, _ := d.GetSaltProfile("webserver")
+	if got2.PillarYAML != "nginx_port: 80\n" {
+		t.Errorf("after update PillarYAML: %q", got2.PillarYAML)
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsStr(s, sub))
+}
+
+func containsStr(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

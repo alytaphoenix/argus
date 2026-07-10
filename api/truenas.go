@@ -37,6 +37,22 @@ func NewTrueNASClient(url, apiKey string, insecure bool) *TrueNASClient {
 	}
 }
 
+// Host returns the hostname (or IP) of the TrueNAS server, suitable for use
+// in NFS mount device strings.
+func (c *TrueNASClient) Host() string {
+	// baseURL is stored as "https://host/api/v2.0"; strip the path.
+	base := strings.TrimSuffix(c.baseURL, "/api/v2.0")
+	// Remove scheme
+	if idx := strings.Index(base, "://"); idx >= 0 {
+		base = base[idx+3:]
+	}
+	// Remove port if present
+	if idx := strings.LastIndex(base, ":"); idx >= 0 {
+		base = base[:idx]
+	}
+	return base
+}
+
 func (c *TrueNASClient) get(ctx context.Context, path string, out interface{}) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+path, nil)
 	if err != nil {

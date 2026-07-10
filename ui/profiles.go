@@ -104,14 +104,21 @@ func ciInputs(p db.CloudInitProfile) []textinput.Model {
 }
 
 func saltInputs(p db.SaltProfile) []textinput.Model {
-	vals := []string{p.Name, p.Target, p.States, p.Notes}
-	hints := []string{"profile name", "target (minion or glob)", "states (comma-separated)", "notes"}
+	vals := []string{p.Name, p.Target, p.States, p.Notes, p.PillarYAML}
+	hints := []string{
+		"profile name",
+		"target (minion or glob)",
+		"states (comma-separated)",
+		"notes",
+		"pillar yaml (optional; written to master before state.apply)",
+	}
+	limits := []int{256, 512, 512, 256, 4096}
 	inputs := make([]textinput.Model, len(vals))
 	for i := range inputs {
 		ti := textinput.New()
 		ti.Placeholder = hints[i]
 		ti.SetValue(vals[i])
-		ti.CharLimit = 512
+		ti.CharLimit = limits[i]
 		inputs[i] = ti
 	}
 	inputs[0].Focus()
@@ -265,12 +272,13 @@ func (m ProfilesModel) saveEditing() (ProfilesModel, tea.Cmd) {
 		m.notice = "saved cloud-init profile " + p.Name
 
 	case editSalt:
-		// inputs order: name, target, states, notes
+		// inputs order: name, target, states, notes, pillar_yaml
 		p := db.SaltProfile{
-			Name:   m.inputs[0].Value(),
-			Target: m.inputs[1].Value(),
-			States: m.inputs[2].Value(),
-			Notes:  m.inputs[3].Value(),
+			Name:       m.inputs[0].Value(),
+			Target:     m.inputs[1].Value(),
+			States:     m.inputs[2].Value(),
+			Notes:      m.inputs[3].Value(),
+			PillarYAML: m.inputs[4].Value(),
 		}
 		if p.Name == "" || p.Target == "" {
 			m.err = fmt.Errorf("profile name and target are required")

@@ -95,3 +95,44 @@ const WiringStateTemplate = `# services.wiring — managed by ratataskr
 
 {% endfor %}
 `
+
+// NASMountTemplate is a Salt/Jinja state that mounts TrueNAS NFS shares on a
+// minion. It reads from the cluster pillar key "storage" which ratataskr
+// populates via the Orchestrate → Pillar screen (t = sync TrueNAS, p = push).
+//
+// Required pillar structure (in /srv/pillar/ratataskr_cluster.sls):
+//   storage:
+//     tank_media:
+//       nfs_host: 192.168.1.10
+//       nfs_export: /mnt/tank/media
+//       mount_path: /mnt/tank/media
+//       nfs_options: ro,noatime      # optional, defaults shown
+//
+// Apply: salt '<minion>' state.apply storage.nas_mounts
+const NASMountTemplate = `# storage.nas_mounts — managed by ratataskr
+# Apply this state on any minion that needs TrueNAS NFS shares mounted.
+# Re-generate + push the cluster pillar from the Orchestrate screen first.
+
+{% for name, share in pillar.get('storage', {}).items() %}
+{% set mount_path = share.get('mount_path', '/mnt/' + name) %}
+{% set nfs_host   = share.get('nfs_host', '') %}
+{% set nfs_export = share.get('nfs_export', share.get('mount_path', '/mnt/' + name)) %}
+{% set nfs_opts   = share.get('nfs_options', 'ro,noatime,nfsvers=4') %}
+
+{% if nfs_host %}
+{{ mount_path }}_dir:
+  file.directory:
+    - name: {{ mount_path }}
+    - makedirs: true
+
+{{ mount_path }}:
+  mount.mounted:
+    - device: {{ nfs_host }}:{{ nfs_export }}
+    - fstype: nfs
+    - opts: {{ nfs_opts }}
+    - mkmnt: false
+    - require:
+      - file: {{ mount_path }}_dir
+{% endif %}
+{% endfor %}
+`

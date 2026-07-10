@@ -413,3 +413,46 @@ type backupsLoadedMsg struct {
 	entries []api.BackupEntry
 	err     error
 }
+
+// Orchestrate messages
+type openOrchestrateMsg struct{}
+type orchKeysLoadedMsg struct {
+	keys *api.SaltKeys
+	err  error
+}
+type orchPendingLoadedMsg struct {
+	vms []db.ProvisionedVM
+	err error
+}
+type orchPillarLoadedMsg struct {
+	entries []db.ClusterPillarEntry
+	err     error
+}
+type orchKeyTickMsg struct{}
+type orchAcceptDoneMsg struct {
+	minion       string
+	action       string // "accept" or "reject"
+	failedStates []string
+	err          error
+}
+type orchPillarPushedMsg struct{ err error }
+type orchTrueNASSyncedMsg struct{ err error }
+
+// Bootstrap execution messages
+type orchBootstrapCheckMsg struct{}
+type orchSvcCheckDoneMsg struct {
+	id     string
+	status string // "ok", "partial", "missing", "notconfigured", "error"
+	detail string
+	err    error
+}
+type orchSvcIngestDoneMsg struct {
+	id     string
+	notice string
+	err    error
+}
+type orchSvcProvisionDoneMsg struct {
+	id           string
+	failedStates []string
+	err          error
+}

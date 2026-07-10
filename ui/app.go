@@ -23,6 +23,7 @@ const (
 	screenDetail
 	screenSalt
 	screenSaltDetail
+	screenOrchestrate
 	screenNomad
 	screenNomadDetail
 	screenProvision
@@ -59,6 +60,7 @@ type App struct {
 	trueNASClient  *api.TrueNASClient
 	plexClient     *api.PlexClient
 	haClient       *api.HAClient
+	hermesClient   *api.HermesClient
 	database       *db.DB
 	sshUser        string
 	sshPassword    string
@@ -69,6 +71,7 @@ type App struct {
 	detail         DetailModel
 	salt           SaltModel
 	saltDetail     SaltDetailModel
+	orch           OrchestrateModel
 	nomad          NomadModel
 	nomadDetail    NomadDetailModel
 	provision      ProvisionModel
@@ -101,6 +104,7 @@ func NewApp(client *api.Client, saltClient *api.SaltClient, nomadClient *api.Nom
 	claudeClient *api.ClaudeClient, matchboxClient *api.MatchboxClient,
 	csClient *api.CrowdSecClient, wazuhClient *api.WazuhClient,
 	trueNASClient *api.TrueNASClient, plexClient *api.PlexClient, haClient *api.HAClient,
+	hermesClient *api.HermesClient,
 	sshUser, sshPassword string, defaults config.DefaultsConfig, cfg config.Config, database *db.DB) App {
 	a := App{
 		client:         client,
@@ -117,6 +121,7 @@ func NewApp(client *api.Client, saltClient *api.SaltClient, nomadClient *api.Nom
 		trueNASClient:  trueNASClient,
 		plexClient:     plexClient,
 		haClient:       haClient,
+		hermesClient:   hermesClient,
 		database:           database,
 		sshUser:            sshUser,
 		sshPassword:        sshPassword,
@@ -235,6 +240,7 @@ func (a App) sectionRoots() []screenID {
 	roots := []screenID{screenNodes}
 	if a.saltClient != nil {
 		roots = append(roots, screenSalt)
+		roots = append(roots, screenOrchestrate)
 	}
 	if a.nomadClient != nil {
 		roots = append(roots, screenNomad)
@@ -273,6 +279,8 @@ func sectionOf(s screenID) screenID {
 // switch sections.
 func (a App) screenCapturesTab() bool {
 	switch a.screen {
+	case screenOrchestrate:
+		return a.orch.form != nil
 	case screenProfiles:
 		return a.profiles.editing != editNone
 	case screenCredentials:
@@ -307,6 +315,14 @@ func (a App) switchSection(next screenID) (App, tea.Cmd) {
 			a.salt = NewSaltModel(a.saltClient)
 			a.salt.width, a.salt.height = a.width, a.height
 			return a, a.salt.Init()
+		}
+	case screenOrchestrate:
+		if a.saltClient != nil {
+			a.screen = screenOrchestrate
+			a.orch = NewOrchestrateModel(a.saltClient, a.database, a.cfg.Salt, a.trueNASClient, a.hermesClient, a.cfg,
+				a.dnsClient, a.caClient, a.plexClient)
+			a.orch.width, a.orch.height = a.width, a.height
+			return a, a.orch.Init()
 		}
 	case screenNomad:
 		if a.nomadClient != nil {
@@ -393,6 +409,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.detail.width, a.detail.height = msg.Width, msg.Height
 		a.salt.width, a.salt.height = msg.Width, msg.Height
 		a.saltDetail.width, a.saltDetail.height = msg.Width, msg.Height
+		a.orch.width, a.orch.height = msg.Width, msg.Height
 		a.nomad.width, a.nomad.height = msg.Width, msg.Height
 		a.nomadDetail.width, a.nomadDetail.height = msg.Width, msg.Height
 		a.provision.width, a.provision.height = msg.Width, msg.Height
@@ -426,6 +443,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case openSaltMsg:
 		return a.switchSection(screenSalt)
+
+	case openOrchestrateMsg:
+		return a.switchSection(screenOrchestrate)
 
 	case minionSelectedMsg:
 		a.screen = screenSaltDetail
@@ -558,7 +578,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case backMsg:
 		switch a.screen {
-		case screenGuests, screenSalt, screenNomad, screenCredentials, screenProfiles,
+		case screenGuests, screenSalt, screenOrchestrate, screenNomad, screenCredentials, screenProfiles,
 			screenMetrics, screenServices, screenPXE, screenSecurity, screenSettings,
 			screenMaintenance, screenPlex, screenRunbooks, screenAlertRoutes, screenLifecycle:
 			a.screen = screenNodes
@@ -632,6 +652,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.salt, cmd = a.salt.Update(msg)
 	case screenSaltDetail:
 		a.saltDetail, cmd = a.saltDetail.Update(msg)
+	case screenOrchestrate:
+		a.orch, cmd = a.orch.Update(msg)
 	case screenNomad:
 		a.nomad, cmd = a.nomad.Update(msg)
 	case screenNomadDetail:
@@ -686,6 +708,7 @@ func (a App) tabBar() string {
 	entries := []tabEntry{{"Proxmox", screenNodes}}
 	if a.saltClient != nil {
 		entries = append(entries, tabEntry{"Salt", screenSalt})
+		entries = append(entries, tabEntry{"Orch", screenOrchestrate})
 	}
 	if a.nomadClient != nil {
 		entries = append(entries, tabEntry{"Nomad", screenNomad})
@@ -752,6 +775,8 @@ func (a App) View() string {
 		content = a.salt.View()
 	case screenSaltDetail:
 		content = a.saltDetail.View()
+	case screenOrchestrate:
+		content = a.orch.View()
 	case screenNomad:
 		content = a.nomad.View()
 	case screenNomadDetail:

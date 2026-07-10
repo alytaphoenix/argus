@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -532,6 +533,19 @@ PRAGMA user_version = 16;
 		}
 	}
 
+	// v17 — per-profile pillar YAML + cluster-wide shared pillar table
+	d.sql.Exec(`ALTER TABLE salt_profiles ADD COLUMN pillar_yaml TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
+	if _, err := d.sql.Exec(`
+CREATE TABLE IF NOT EXISTS cluster_pillar (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL DEFAULT '',
+    source     TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL
+);
+`); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -720,27 +734,28 @@ func (d *DB) GetCloudInitProfile(name string) (*CloudInitProfile, error) {
 // ── Salt profiles ────────────────────────────────────────────────────────────
 
 type SaltProfile struct {
-	ID        int64
-	Name      string
-	Target    string
-	States    string // comma-separated
-	Notes     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID         int64
+	Name       string
+	Target     string
+	States     string // comma-separated
+	Notes      string
+	PillarYAML string // YAML written to master before state.apply
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 func (d *DB) SaveSaltProfile(p SaltProfile) error {
 	now := time.Now()
 	if p.ID == 0 {
 		_, err := d.sql.Exec(`
-INSERT INTO salt_profiles (name, target, states, notes, created_at, updated_at)
-VALUES (?,?,?,?,?,?)`,
-			p.Name, p.Target, p.States, p.Notes, now, now)
+INSERT INTO salt_profiles (name, target, states, notes, pillar_yaml, created_at, updated_at)
+VALUES (?,?,?,?,?,?,?)`,
+			p.Name, p.Target, p.States, p.Notes, p.PillarYAML, now, now)
 		return err
 	}
 	_, err := d.sql.Exec(`
-UPDATE salt_profiles SET name=?, target=?, states=?, notes=?, updated_at=? WHERE id=?`,
-		p.Name, p.Target, p.States, p.Notes, now, p.ID)
+UPDATE salt_profiles SET name=?, target=?, states=?, notes=?, pillar_yaml=?, updated_at=? WHERE id=?`,
+		p.Name, p.Target, p.States, p.Notes, p.PillarYAML, now, p.ID)
 	return err
 }
 
@@ -750,7 +765,7 @@ func (d *DB) DeleteSaltProfile(name string) error {
 }
 
 func (d *DB) SaltProfiles() ([]SaltProfile, error) {
-	rows, err := d.sql.Query(`SELECT id,name,target,states,notes,created_at,updated_at FROM salt_profiles ORDER BY name`)
+	rows, err := d.sql.Query(`SELECT id,name,target,states,notes,coalesce(pillar_yaml,''),created_at,updated_at FROM salt_profiles ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -758,7 +773,7 @@ func (d *DB) SaltProfiles() ([]SaltProfile, error) {
 	var out []SaltProfile
 	for rows.Next() {
 		var p SaltProfile
-		if err := rows.Scan(&p.ID, &p.Name, &p.Target, &p.States, &p.Notes, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Target, &p.States, &p.Notes, &p.PillarYAML, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -856,12 +871,106 @@ WHERE id = (SELECT id FROM provisioned_vms WHERE vmid=? ORDER BY provisioned_at 
 func (d *DB) GetSaltProfile(name string) (*SaltProfile, error) {
 	var p SaltProfile
 	err := d.sql.QueryRow(
-		`SELECT id,name,target,states,notes,created_at,updated_at FROM salt_profiles WHERE name=?`, name,
-	).Scan(&p.ID, &p.Name, &p.Target, &p.States, &p.Notes, &p.CreatedAt, &p.UpdatedAt)
+		`SELECT id,name,target,states,notes,coalesce(pillar_yaml,''),created_at,updated_at FROM salt_profiles WHERE name=?`, name,
+	).Scan(&p.ID, &p.Name, &p.Target, &p.States, &p.Notes, &p.PillarYAML, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return &p, err
+}
+
+// PendingSaltVMs returns provisioned VMs that have a salt_profile assigned
+// but have not yet had salt applied.
+func (d *DB) PendingSaltVMs() ([]ProvisionedVM, error) {
+	rows, err := d.sql.Query(`
+SELECT id,vmid,name,node,template_id,cloud_init_profile,salt_profile,
+       salt_applied_at,cloud_init_applied_at,notes,provisioned_at,
+       coalesce(vm_ip,''),coalesce(vm_type,''),coalesce(last_status,''),last_seen_at
+FROM provisioned_vms
+WHERE (salt_profile IS NOT NULL AND salt_profile != '') AND salt_applied_at IS NULL
+ORDER BY provisioned_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProvisionedVM
+	for rows.Next() {
+		var vm ProvisionedVM
+		if err := rows.Scan(
+			&vm.ID, &vm.VMID, &vm.Name, &vm.Node, &vm.TemplateID,
+			&vm.CloudInitProfile, &vm.SaltProfile,
+			&vm.SaltAppliedAt, &vm.CloudInitAppliedAt,
+			&vm.Notes, &vm.ProvisionedAt,
+			&vm.VMIP, &vm.VMType, &vm.LastStatus, &vm.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, vm)
+	}
+	return out, rows.Err()
+}
+
+// ── Cluster pillar ───────────────────────────────────────────────────────────
+
+// ClusterPillarEntry is one key-value pair in the cluster-wide Salt pillar.
+// source identifies what populated the entry ("truenas", "manual", etc.).
+type ClusterPillarEntry struct {
+	Key       string
+	Value     string
+	Source    string
+	UpdatedAt time.Time
+}
+
+// SetClusterPillar upserts a key in the cluster pillar table.
+func (d *DB) SetClusterPillar(key, value, source string) error {
+	_, err := d.sql.Exec(`
+INSERT INTO cluster_pillar (key, value, source, updated_at) VALUES (?,?,?,?)
+ON CONFLICT(key) DO UPDATE SET value=excluded.value, source=excluded.source, updated_at=excluded.updated_at`,
+		key, value, source, time.Now())
+	return err
+}
+
+// ClusterPillar returns all entries ordered by key.
+func (d *DB) ClusterPillar() ([]ClusterPillarEntry, error) {
+	rows, err := d.sql.Query(`SELECT key,value,source,updated_at FROM cluster_pillar ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ClusterPillarEntry
+	for rows.Next() {
+		var e ClusterPillarEntry
+		if err := rows.Scan(&e.Key, &e.Value, &e.Source, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// DeleteClusterPillarKey removes a single entry from the cluster pillar.
+func (d *DB) DeleteClusterPillarKey(key string) error {
+	_, err := d.sql.Exec(`DELETE FROM cluster_pillar WHERE key=?`, key)
+	return err
+}
+
+// GenerateClusterPillarYAML builds a YAML string from all cluster pillar
+// entries suitable for writing to /srv/pillar/ratataskr_cluster.sls.
+// Each entry's Value is treated as a YAML block indented under its Key.
+func (d *DB) GenerateClusterPillarYAML() (string, error) {
+	entries, err := d.ClusterPillar()
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	sb.WriteString("# managed by ratataskr — push from Orchestrate → Pillar\n")
+	for _, e := range entries {
+		sb.WriteString(e.Key + ":\n")
+		for _, line := range strings.Split(strings.TrimRight(e.Value, "\n"), "\n") {
+			sb.WriteString("  " + line + "\n")
+		}
+	}
+	return sb.String(), nil
 }
 
 // ── Salt apply events ────────────────────────────────────────────────────────
