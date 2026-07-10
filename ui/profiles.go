@@ -153,11 +153,11 @@ func (m ProfilesModel) Update(msg tea.Msg) (ProfilesModel, tea.Cmd) {
 			return m, tea.Quit
 		case "esc", "b":
 			return m, func() tea.Msg { return backMsg{} }
-		case "tab":
+		case "right", "l":
 			m.tab = (m.tab + 1) % 5
 			m.cursor = 0
 			m.notice, m.err = "", nil
-		case "shift+tab":
+		case "left", "h":
 			m.tab = (m.tab + 4) % 5
 			m.cursor = 0
 			m.notice, m.err = "", nil
@@ -367,9 +367,9 @@ func (m ProfilesModel) View() string {
 		sb.WriteString("\n\n")
 	}
 
-	help := "  n new  enter/e edit  d delete  tab next-tab  R refresh  b back  q quit"
+	help := "  n new  enter/e edit  d delete  ←/→ switch tab  R refresh  b back  q quit"
 	if m.tab == profTabHistory || m.tab == profTabSaltEvents || m.tab == profTabNomadEvents {
-		help = "  tab next-tab  R refresh  b back  q quit"
+		help = "  ←/→ switch tab  R refresh  b back  q quit"
 	}
 	sb.WriteString(styleHelp.Render(help) + "\n")
 	return sb.String()

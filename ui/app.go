@@ -268,6 +268,37 @@ func sectionOf(s screenID) screenID {
 }
 
 
+// screenCapturesTab reports whether the active screen has a form or text
+// input open that uses tab for field navigation, in which case tab must not
+// switch sections.
+func (a App) screenCapturesTab() bool {
+	switch a.screen {
+	case screenProfiles:
+		return a.profiles.editing != editNone
+	case screenCredentials:
+		return a.credentials.editing
+	case screenMetrics:
+		return a.metrics.customActive || a.metrics.lokiActive
+	case screenServices:
+		return a.services.addingSvc || a.services.addingDNS || a.services.pickingTemplate
+	case screenPXE:
+		return a.pxe.capturesTab()
+	case screenSecurity:
+		return a.security.scanEditing || a.security.cveEditing
+	case screenSettings:
+		return a.settings.editing
+	case screenMaintenance:
+		return a.maintenance.tab == maintTabConfigure && a.maintenance.wizardStep == maintWizardSchedule
+	case screenRunbooks:
+		return a.runbooks.editing
+	case screenAlertRoutes:
+		return a.alertRoutes.editing
+	case screenLifecycle:
+		return a.lifecycle.editing
+	}
+	return false
+}
+
 func (a App) switchSection(next screenID) (App, tea.Cmd) {
 	switch next {
 	case screenSalt:
@@ -566,7 +597,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cur := sectionOf(a.screen)
 		if msg.String() == "tab" || msg.String() == "shift+tab" {
-			if cur == a.screen {
+			if cur == a.screen && !a.screenCapturesTab() {
 				roots := a.sectionRoots()
 				idx := 0
 				for i, r := range roots {
@@ -682,9 +713,30 @@ func (a App) tabBar() string {
 			parts = append(parts, styleTabInactive.Render(" "+label))
 		}
 	}
-	bar := strings.Join(parts, styleDim.Render("│"))
+
+	maxw := max(a.width, 40)
+	sep := styleDim.Render("│")
+	var lines []string
+	line, lineW := "", 0
+	for _, p := range parts {
+		w := lipgloss.Width(p)
+		if lineW > 0 && lineW+1+w > maxw {
+			lines = append(lines, line)
+			line, lineW = "", 0
+		}
+		if lineW > 0 {
+			line += sep
+			lineW++
+		}
+		line += p
+		lineW += w
+	}
 	hint := styleDim.Render(" tab/shift+tab")
-	return bar + "  " + hint + "\n" + styleDim.Render(strings.Repeat("─", max(a.width, 40))) + "\n"
+	if lineW+2+lipgloss.Width(hint) <= maxw {
+		line += "  " + hint
+	}
+	lines = append(lines, line)
+	return strings.Join(lines, "\n") + "\n" + styleDim.Render(strings.Repeat("─", maxw)) + "\n"
 }
 
 func (a App) View() string {
@@ -735,6 +787,9 @@ func (a App) View() string {
 	}
 
 	view := a.tabBar() + content
+	if a.width > 0 {
+		view = lipgloss.NewStyle().MaxWidth(a.width).Render(view)
+	}
 	if a.claudeOverlay.visible {
 		view = a.claudeOverlay.renderOver(view, a.width, a.height)
 	}

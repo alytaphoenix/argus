@@ -508,6 +508,16 @@ func (m PXEModel) Update(msg tea.Msg) (PXEModel, tea.Cmd) {
 	return m, nil
 }
 
+func (m PXEModel) capturesTab() bool {
+	if m.addingProf || m.addingGrp {
+		return true
+	}
+	return m.tab == pxeTabSpawn &&
+		(m.spawnStep == spawnStepHostInfo ||
+			m.spawnStep == spawnStepNetwork ||
+			(m.spawnStep == spawnStepCluster && m.spawnNodeType == "ha"))
+}
+
 func (m PXEModel) handleKey(msg tea.KeyMsg) (PXEModel, tea.Cmd) {
 	key := msg.String()
 

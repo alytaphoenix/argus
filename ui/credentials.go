@@ -158,7 +158,7 @@ func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 			return m, tea.Quit
 		case "esc", "b":
 			return m, func() tea.Msg { return backMsg{} }
-		case "tab":
+		case "left", "right", "h", "l":
 			if m.section == credSectionGlobal {
 				m.section = credSectionNodes
 			} else {
@@ -304,7 +304,7 @@ func (m CredentialsModel) View() string {
 	} else {
 		sb.WriteString(styleTabInactive.Render(" "+gs) + styleDim.Render("│") + styleTabActive.Render("▸"+ns))
 	}
-	sb.WriteString(styleDim.Render("  tab switch") + "\n\n")
+	sb.WriteString(styleDim.Render("  ←/→ switch") + "\n\n")
 
 	if m.section == credSectionGlobal {
 		m.viewGlobal(&sb)
@@ -335,9 +335,9 @@ func (m CredentialsModel) View() string {
 			sb.WriteString("\n\n")
 		}
 		if m.section == credSectionGlobal {
-			sb.WriteString(styleHelp.Render("  enter edit  d delete  tab switch section  b back") + "\n")
+			sb.WriteString(styleHelp.Render("  enter edit  d delete  ←/→ switch section  b back") + "\n")
 		} else {
-			sb.WriteString(styleHelp.Render("  enter add/edit  d delete  tab switch section  b back") + "\n")
+			sb.WriteString(styleHelp.Render("  enter add/edit  d delete  ←/→ switch section  b back") + "\n")
 		}
 	}
 

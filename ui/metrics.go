@@ -373,10 +373,10 @@ func (m MetricsModel) Update(msg tea.Msg) (MetricsModel, tea.Cmd) {
 			return m, tea.Quit
 		case "esc", "b":
 			return m, func() tea.Msg { return backMsg{} }
-		case "tab":
+		case "right", "l":
 			m.tab = (m.tab + 1) % metricsTab(metricsTabCount)
 			return m, m.enterTab(m.tab)
-		case "shift+tab":
+		case "left", "h":
 			m.tab = (m.tab + metricsTab(metricsTabCount-1)) % metricsTab(metricsTabCount)
 			return m, m.enterTab(m.tab)
 		case "R":
@@ -510,15 +510,15 @@ func (m MetricsModel) View() string {
 	}
 
 	sb.WriteString("\n")
-	helpLine := "  tab next  shift+tab prev  R refresh  b back  q quit"
+	helpLine := "  ←/→ switch tab  R refresh  b back  q quit"
 	switch m.tab {
 	case metricsTabScrapeConfig:
-		helpLine = "  ↑/↓ scroll  tab next  b back  q quit"
+		helpLine = "  ↑/↓ scroll  ←/→ switch tab  b back  q quit"
 	case metricsTabLoki:
-		helpLine = "  f query  ↑/↓ scroll  R re-run  tab next  b back  q quit"
+		helpLine = "  f query  ↑/↓ scroll  R re-run  ←/→ switch tab  b back  q quit"
 	default:
 		if m.promClient != nil {
-			helpLine = "  tab next  shift+tab prev  c custom query  R refresh  b back  q quit"
+			helpLine = "  ←/→ switch tab  c custom query  R refresh  b back  q quit"
 		}
 	}
 	sb.WriteString(styleHelp.Render(helpLine) + "\n")
