@@ -2,7 +2,18 @@
   "permissions": {
     "allow": [
       "Bash(gofmt -d *)",
-      "Bash(gofmt -l *)"
+      "Bash(gofmt -l *)",
+      "Bash(go build ./...)",
+      "Bash(go build ./... *)",
+      "Bash(go vet ./...)",
+      "Bash(go vet ./... *)",
+      "Bash(go test ./...)",
+      "Bash(go test ./... *)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/*)",
+      "Bash(curl -s \"https://api.github.com/*)",
+      "Bash(sqlite3 ~/.config/ratataskr/ratataskr.db \"SELECT *)",
+      "Bash(omlx --help *)",
+      "Bash(omlx diagnose *)"
     ]
   }
 }
