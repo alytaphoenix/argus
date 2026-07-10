@@ -597,11 +597,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cur := sectionOf(a.screen)
 		if msg.String() == "tab" || msg.String() == "shift+tab" {
-			if cur == a.screen && !a.screenCapturesTab() {
+			if !a.screenCapturesTab() {
 				roots := a.sectionRoots()
 				idx := 0
 				for i, r := range roots {
-					if r == a.screen {
+					if r == cur {
 						idx = i
 						break
 					}
@@ -612,7 +612,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					next = (idx - 1 + len(roots)) % len(roots)
 				}
-				if roots[next] != a.screen {
+				if roots[next] != cur {
 					return a.switchSection(roots[next])
 				}
 				return a, nil
