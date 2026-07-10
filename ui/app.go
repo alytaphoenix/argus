@@ -280,7 +280,7 @@ func sectionOf(s screenID) screenID {
 func (a App) screenCapturesTab() bool {
 	switch a.screen {
 	case screenOrchestrate:
-		return a.orch.form != nil
+		return a.orch.form != nil || a.orch.provisionForm != nil || a.orch.provisionConfirm != nil || a.orch.bsvcActionDialog != nil
 	case screenProfiles:
 		return a.profiles.editing != editNone
 	case screenCredentials:

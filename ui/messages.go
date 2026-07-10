@@ -451,8 +451,13 @@ type orchSvcIngestDoneMsg struct {
 	notice string
 	err    error
 }
+type orchSvcProvisionStartedMsg struct {
+	id  string
+	jid string
+}
 type orchSvcProvisionDoneMsg struct {
 	id           string
+	jid          string
 	failedStates []string
 	err          error
 }
