@@ -317,13 +317,11 @@ func (a App) switchSection(next screenID) (App, tea.Cmd) {
 			return a, a.salt.Init()
 		}
 	case screenOrchestrate:
-		if a.saltClient != nil {
-			a.screen = screenOrchestrate
-			a.orch = NewOrchestrateModel(a.saltClient, a.database, a.cfg.Salt, a.trueNASClient, a.hermesClient, a.cfg,
-				a.dnsClient, a.caClient, a.plexClient)
-			a.orch.width, a.orch.height = a.width, a.height
-			return a, a.orch.Init()
-		}
+		a.screen = screenOrchestrate
+		a.orch = NewOrchestrateModel(a.saltClient, a.database, a.cfg.Salt, a.trueNASClient, a.hermesClient, a.cfg,
+			a.dnsClient, a.caClient, a.plexClient)
+		a.orch.width, a.orch.height = a.width, a.height
+		return a, a.orch.Init()
 	case screenNomad:
 		if a.nomadClient != nil {
 			a.screen = screenNomad
