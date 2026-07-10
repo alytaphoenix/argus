@@ -232,6 +232,9 @@ func (m OrchestrateModel) applyPendingVMCmd(vm db.ProvisionedVM) tea.Cmd {
 	database := m.database
 	saltCfg := m.saltCfg
 	return func() tea.Msg {
+		if saltClient == nil {
+			return orchAcceptDoneMsg{minion: vm.Name, action: "apply", err: fmt.Errorf("Salt not configured")}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		failed := applySaltProfile(ctx, saltClient, database, saltCfg, vm.Name, vm.SaltProfile, vm.VMID)
@@ -322,6 +325,9 @@ func (m OrchestrateModel) pushClusterPillarCmd() tea.Cmd {
 	database := m.database
 	saltCfg := m.saltCfg
 	return func() tea.Msg {
+		if saltClient == nil {
+			return orchPillarPushedMsg{err: fmt.Errorf("Salt not configured")}
+		}
 		if saltCfg.MasterMinion == "" {
 			return orchPillarPushedMsg{err: fmt.Errorf("master_minion not set in [salt] config")}
 		}
@@ -1413,6 +1419,9 @@ func (m OrchestrateModel) View() string {
 }
 
 func (m OrchestrateModel) viewKeys() string {
+	if m.saltClient == nil {
+		return styleDim.Render("Salt not configured — add [salt] to config.toml to manage minion keys.")
+	}
 	if m.keys == nil {
 		return m.spinner.View() + " loading keys..."
 	}
@@ -1462,6 +1471,9 @@ func (m OrchestrateModel) viewKeys() string {
 }
 
 func (m OrchestrateModel) viewPending() string {
+	if m.saltClient == nil {
+		return styleDim.Render("Salt not configured — add [salt] to config.toml to manage pending VMs.")
+	}
 	if len(m.pending) == 0 {
 		return styleDim.Render("No VMs awaiting salt apply. Provision a VM with a salt profile assigned and it will appear here.")
 	}

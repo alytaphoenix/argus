@@ -240,8 +240,8 @@ func (a App) sectionRoots() []screenID {
 	roots := []screenID{screenNodes}
 	if a.saltClient != nil {
 		roots = append(roots, screenSalt)
-		roots = append(roots, screenOrchestrate)
 	}
+	roots = append(roots, screenOrchestrate)
 	if a.nomadClient != nil {
 		roots = append(roots, screenNomad)
 	}
@@ -708,8 +708,8 @@ func (a App) tabBar() string {
 	entries := []tabEntry{{"Proxmox", screenNodes}}
 	if a.saltClient != nil {
 		entries = append(entries, tabEntry{"Salt", screenSalt})
-		entries = append(entries, tabEntry{"Orch", screenOrchestrate})
 	}
+	entries = append(entries, tabEntry{"Orch", screenOrchestrate})
 	if a.nomadClient != nil {
 		entries = append(entries, tabEntry{"Nomad", screenNomad})
 	}
