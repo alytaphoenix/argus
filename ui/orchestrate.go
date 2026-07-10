@@ -46,14 +46,76 @@ type orchBootstrapActionDialog struct {
 	status  bsvcStatus
 	opts    []string
 	cursor  int
+	detail  string // optional advisory note shown below service name
 }
 
 // orchProvisionConfirm is shown after the provision form is submitted, before running state.apply.
 type orchProvisionConfirm struct {
-	svcID   string
-	svcName string
-	target  string
-	state   string
+	svcID      string
+	svcName    string
+	target     string
+	state      string
+	derivedURL string // non-empty when a bootstrapSpec can derive the URL from target+domain
+}
+
+// bootstrapSvcSpec holds URL-derivation conventions for a bootstrap service.
+// After a successful Salt provision the derived URL is written to config.toml
+// and App is told to rebuild the live client.
+type bootstrapSvcSpec struct {
+	protocol    string
+	port        int
+	deps        []string                       // IDs of services that must be OK first (advisory)
+	patchConfig func(*config.Config, string)   // writes derived URL into cfg
+}
+
+func (s bootstrapSvcSpec) deriveURL(target, domain string) string {
+	if s.port == 0 || s.protocol == "" {
+		return ""
+	}
+	host := target
+	if domain != "" {
+		host = target + "." + domain
+	}
+	return fmt.Sprintf("%s://%s:%d", s.protocol, host, s.port)
+}
+
+// bootstrapSpecs maps service IDs to their URL conventions.
+var bootstrapSpecs = map[string]bootstrapSvcSpec{
+	"salt_master": {
+		protocol:    "https",
+		port:        8000,
+		patchConfig: func(cfg *config.Config, url string) { cfg.Salt.URL = url },
+	},
+	"dns": {
+		protocol:    "http",
+		port:        5380,
+		deps:        []string{"salt_master"},
+		patchConfig: func(cfg *config.Config, url string) { cfg.Technitium.URL = url },
+	},
+	"certs": {
+		protocol:    "https",
+		port:        8443,
+		deps:        []string{"dns"},
+		patchConfig: func(cfg *config.Config, url string) { cfg.StepCA.URL = url },
+	},
+	"truenas": {
+		protocol:    "https",
+		port:        443,
+		deps:        []string{"salt_master"},
+		patchConfig: func(cfg *config.Config, url string) { cfg.TrueNAS.URL = url },
+	},
+	"plex": {
+		protocol:    "http",
+		port:        32400,
+		deps:        []string{"truenas"},
+		patchConfig: func(cfg *config.Config, url string) { cfg.Plex.URL = url },
+	},
+	"hermes": {
+		protocol:    "http",
+		port:        7583,
+		deps:        []string{"salt_master"},
+		patchConfig: func(cfg *config.Config, url string) { cfg.Hermes.URL = url },
+	},
 }
 
 type orchTab int
@@ -110,13 +172,14 @@ type OrchestrateModel struct {
 	form    *orchPillarForm // pillar tab form
 
 	// Bootstrap tab state
-	bootstrapServices []bootstrapService
-	bsvcActionDialog  *orchBootstrapActionDialog
-	provisionForm     *orchPillarForm    // bootstrap provision (target, state)
-	provisionConfirm  *orchProvisionConfirm // confirm before running state.apply
-	provisioningFor   string             // service id being provisioned
-	provisionQueue    []string           // remaining service IDs to provision in order
-	activeJID         string             // JID of currently-running provision job
+	bootstrapServices  []bootstrapService
+	bsvcActionDialog   *orchBootstrapActionDialog
+	provisionForm      *orchPillarForm       // bootstrap provision (target, state)
+	provisionConfirm   *orchProvisionConfirm // confirm before running state.apply
+	provisioningFor    string                // service id being provisioned
+	provisionQueue     []string              // remaining service IDs to provision in order
+	activeJID          string                // JID of currently-running provision job
+	provisionDerivedURL string               // URL derived from target+domain, carried through provision→done
 
 	width, height int
 	spinner       spinner.Model
@@ -146,6 +209,7 @@ func NewOrchestrateModel(
 
 func defaultBootstrapServices() []bootstrapService {
 	return []bootstrapService{
+		{id: "salt_master", name: "Salt master", description: "Salt automation backbone — required for all provisioning"},
 		{id: "dns", name: "DNS (Technitium)", description: "Authoritative DNS for the homelab domain"},
 		{id: "certs", name: "Certificates (step-ca)", description: "Internal CA for TLS certificates"},
 		{id: "truenas", name: "TrueNAS NFS", description: "Network storage — pools, datasets, NFS shares"},
@@ -203,6 +267,8 @@ func (m OrchestrateModel) applyKeyActionCmd(action, minion, profileName string, 
 	saltClient := m.saltClient
 	database := m.database
 	saltCfg := m.saltCfg
+	dnsClient := m.dnsClient
+	domain := m.cfg.Globals.Domain
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
@@ -216,6 +282,26 @@ func (m OrchestrateModel) applyKeyActionCmd(action, minion, profileName string, 
 				return orchAcceptDoneMsg{minion: minion, action: action, err: err}
 			}
 			return orchAcceptDoneMsg{minion: minion, action: action}
+		}
+
+		// Key accepted — best-effort DNS A-record from provisioned_vms IP lookup.
+		if dnsClient != nil && domain != "" && database != nil {
+			if vms, err := database.ProvisionedVMs(); err == nil {
+				for _, vm := range vms {
+					if strings.EqualFold(vm.Name, minion) && vm.VMIP != "" {
+						aCtx, aCancel := context.WithTimeout(context.Background(), 10*time.Second)
+						_ = dnsClient.AddRecord(aCtx, api.DNSAddOptions{
+							Zone:      domain,
+							Domain:    minion + "." + domain,
+							Type:      "A",
+							IPAddress: vm.VMIP,
+							Overwrite: true,
+						})
+						aCancel()
+						break
+					}
+				}
+			}
 		}
 
 		// After accepting: apply profile if matched.
@@ -399,6 +485,23 @@ func (m OrchestrateModel) checkSvcCmd(id string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		switch id {
+		case "salt_master":
+			if cfg.Salt.URL == "" {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "add [salt] url + password via ratataskr config"}
+			}
+			if salt == nil {
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "client not initialised — set [salt] credentials"}
+			}
+			keys, err := salt.ListKeys(ctx)
+			if err != nil {
+				return orchSvcCheckDoneMsg{id: id, status: "missing", detail: "salt-api unreachable: " + err.Error()}
+			}
+			accepted := len(keys.Accepted)
+			if accepted == 0 {
+				return orchSvcCheckDoneMsg{id: id, status: "partial", detail: "reachable, 0 accepted minions"}
+			}
+			return orchSvcCheckDoneMsg{id: id, status: "ok", detail: fmt.Sprintf("%d minion(s) accepted", accepted)}
+
 		case "dns":
 			if cfg.Technitium.URL == "" {
 				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "add [technitium] url to config.toml"}
@@ -878,6 +981,7 @@ func (m OrchestrateModel) Update(msg tea.Msg) (OrchestrateModel, tea.Cmd) {
 			}
 		}
 		m.provisioningFor = ""
+		var extraCmds []tea.Cmd
 		if msg.err != nil {
 			m.err = msg.err
 		} else if len(msg.failedStates) > 0 {
@@ -888,8 +992,24 @@ func (m OrchestrateModel) Update(msg tea.Msg) (OrchestrateModel, tea.Cmd) {
 				jidSuffix = " (JID: " + msg.jid + ")"
 			}
 			m.notice = msg.id + " provisioned" + jidSuffix + " — re-checking..."
+			// Write derived URL to config.toml and signal App to rebuild the live client.
+			if m.provisionDerivedURL != "" {
+				if spec, ok := bootstrapSpecs[msg.id]; ok && spec.patchConfig != nil {
+					spec.patchConfig(&m.cfg, m.provisionDerivedURL)
+					if saveErr := config.SaveConfig(&m.cfg); saveErr != nil {
+						m.notice += " (config.toml save failed: " + saveErr.Error() + ")"
+					} else {
+						updatedCfg := m.cfg
+						reloadID := msg.id
+						extraCmds = append(extraCmds, func() tea.Msg {
+							return orchReloadClientMsg{id: reloadID, updatedCfg: updatedCfg}
+						})
+					}
+				}
+			}
+			m.provisionDerivedURL = ""
 		}
-		cmds := []tea.Cmd{m.checkSvcCmd(msg.id)}
+		cmds := append([]tea.Cmd{m.checkSvcCmd(msg.id)}, extraCmds...)
 		// Advance provision queue — open form for next service.
 		if len(m.provisionQueue) > 0 {
 			nextID := m.provisionQueue[0]
@@ -1008,20 +1128,35 @@ func (m OrchestrateModel) handleKey(msg tea.KeyMsg) (OrchestrateModel, tea.Cmd) 
 	case "enter":
 		if m.tab == orchTabBootstrap && m.cursor < len(m.bootstrapServices) {
 			svc := m.bootstrapServices[m.cursor]
+			blocked := m.blockedBy()
+			depHint := ""
+			if dep, isBlocked := blocked[svc.id]; isBlocked {
+				depHint = "note: " + dep + " not yet OK — proceed anyway at your discretion"
+			}
 			switch svc.status {
 			case bsvcNotConfigured:
-				m.notice = "Add configuration for " + svc.name + " to config.toml first"
+				if svc.id == "salt_master" {
+					m.notice = "Run: ratataskr config — set [salt] url + password in the Salt section, then press x to re-check"
+				} else {
+					m.notice = "Add configuration for " + svc.name + " to config.toml first (run: ratataskr config)"
+				}
 			case bsvcMissing:
+				opts := []string{"Provision via Salt", "Skip"}
+				if svc.id == "salt_master" {
+					opts = []string{"Configure in ratataskr config", "Skip"}
+				}
 				m.bsvcActionDialog = &orchBootstrapActionDialog{
 					service: svc.id,
 					status:  svc.status,
-					opts:    []string{"Provision via Salt", "Skip"},
+					opts:    opts,
+					detail:  depHint,
 				}
 			case bsvcPartial:
 				m.bsvcActionDialog = &orchBootstrapActionDialog{
 					service: svc.id,
 					status:  svc.status,
 					opts:    []string{"Wire up what exists", "Re-apply Salt state", "Skip"},
+					detail:  depHint,
 				}
 			case bsvcOK:
 				m.bsvcActionDialog = &orchBootstrapActionDialog{
@@ -1085,6 +1220,7 @@ func (m OrchestrateModel) handleProvisionConfirm(msg tea.KeyMsg) (OrchestrateMod
 	case "y", "enter":
 		c := m.provisionConfirm
 		m.provisionConfirm = nil
+		m.provisionDerivedURL = c.derivedURL
 		for i, svc := range m.bootstrapServices {
 			if svc.id == c.svcID {
 				m.bootstrapServices[i].provisioning = true
@@ -1174,6 +1310,8 @@ func (m OrchestrateModel) executeBootstrapAction(svcID, opt string) (Orchestrate
 				break
 			}
 		}
+	case opt == "Configure in ratataskr config":
+		m.notice = "Run: ratataskr config — fill the Salt section, save, then press x to re-check"
 	case opt == "Provision via Salt" || opt == "Re-apply Salt state":
 		m.provisionForm = newProvisionForm("", "services."+svcID, m.knownMinions())
 		m.provisioningFor = svcID
@@ -1238,11 +1376,16 @@ func (m OrchestrateModel) submitProvisionForm() (OrchestrateModel, tea.Cmd) {
 		m.err = fmt.Errorf("Salt not configured — cannot provision")
 		return m, nil
 	}
+	var derivedURL string
+	if spec, ok := bootstrapSpecs[svcID]; ok && spec.patchConfig != nil {
+		derivedURL = spec.deriveURL(target, m.cfg.Globals.Domain)
+	}
 	m.provisionConfirm = &orchProvisionConfirm{
-		svcID:   svcID,
-		svcName: svc.name,
-		target:  target,
-		state:   state,
+		svcID:      svcID,
+		svcName:    svc.name,
+		target:     target,
+		state:      state,
+		derivedURL: derivedURL,
 	}
 	return m, nil
 }
@@ -1570,6 +1713,7 @@ func (m OrchestrateModel) viewBootstrap() string {
 	hdr := fmt.Sprintf("%-3s  %-9s  %-22s  %s", "#", "STATUS", "SERVICE", "DETAIL")
 	sb.WriteString(styleDim.Render(hdr) + "\n")
 
+	blocked := m.blockedBy()
 	for i, svc := range m.bootstrapServices {
 		statusLabel := bsvcStatusLabel(svc.status)
 		if svc.provisioning || svc.ingesting {
@@ -1579,9 +1723,14 @@ func (m OrchestrateModel) viewBootstrap() string {
 		if svc.errMsg != "" {
 			detail = styleError.Render(svc.errMsg)
 		}
+		if dep, isBlocked := blocked[svc.id]; isBlocked && svc.status == bsvcUnknown {
+			detail = styleDim.Render("needs " + dep + " first")
+		}
 		row := fmt.Sprintf("%-3d  %s  %-22s  %s", i+1, statusLabel, truncate(svc.name, 22), detail)
 		if i == m.cursor {
 			sb.WriteString(styleSelected.Render(row) + "\n")
+		} else if _, isBlocked := blocked[svc.id]; isBlocked && svc.status == bsvcUnknown {
+			sb.WriteString(styleDim.Render(row) + "\n")
 		} else {
 			sb.WriteString(row + "\n")
 		}
@@ -1595,7 +1744,11 @@ func (m OrchestrateModel) viewBootstrapActionDialog() string {
 	d := m.bsvcActionDialog
 	svc := m.bootstrapServiceByID(d.service)
 	var sb strings.Builder
-	sb.WriteString(styleBold.Render("Action: "+svc.name) + " — " + styleDim.Render(svc.detail) + "\n\n")
+	sb.WriteString(styleBold.Render("Action: "+svc.name) + " — " + styleDim.Render(svc.detail) + "\n")
+	if d.detail != "" {
+		sb.WriteString(styleDim.Render("⚠  "+d.detail) + "\n")
+	}
+	sb.WriteString("\n")
 	for i, opt := range d.opts {
 		if i == d.cursor {
 			sb.WriteString(styleSelected.Render("► "+opt) + "\n")
@@ -1619,9 +1772,19 @@ func (m OrchestrateModel) viewProvisionForm() string {
 			label = styleBold.Render(labels[i]+": ")
 		}
 		sb.WriteString(label + inp.View() + "\n")
-		// Show accepted minions as hints below the target field.
-		if i == 0 && len(m.provisionForm.knownHints) > 1 {
-			sb.WriteString(styleDim.Render("  known: "+strings.Join(m.provisionForm.knownHints, ", ")) + "\n")
+		if i == 0 {
+			// Show accepted minions as hints below the target field.
+			if len(m.provisionForm.knownHints) > 1 {
+				sb.WriteString(styleDim.Render("  known: "+strings.Join(m.provisionForm.knownHints, ", ")) + "\n")
+			}
+			// Show derived URL preview when a spec is available.
+			if target := strings.TrimSpace(inp.Value()); target != "" {
+				if spec, ok := bootstrapSpecs[svcID]; ok && spec.patchConfig != nil {
+					if u := spec.deriveURL(target, m.cfg.Globals.Domain); u != "" {
+						sb.WriteString(styleDim.Render("  → will configure: "+u) + "\n")
+					}
+				}
+			}
 		}
 	}
 	sb.WriteString("\n" + styleDim.Render("tab") + " next  " + styleDim.Render("ctrl+s") + " continue  " + styleDim.Render("esc") + " cancel")
@@ -1633,6 +1796,10 @@ func (m OrchestrateModel) viewProvisionConfirm() string {
 	var sb strings.Builder
 	sb.WriteString(styleBold.Render("Confirm: provision "+c.svcName) + "\n\n")
 	sb.WriteString(fmt.Sprintf("Will run:  %s\n", styleBold.Render("salt '"+c.target+"' state.apply "+c.state)))
+	if c.derivedURL != "" {
+		sb.WriteString(styleDim.Render("On success: writes config.toml — "+c.svcID+" url = "+c.derivedURL) + "\n")
+		sb.WriteString(styleDim.Render("            (reformats config.toml; comments preserved as generated header)") + "\n")
+	}
 	sb.WriteString("\n")
 	sb.WriteString(styleBold.Render("y") + "/" + styleBold.Render("enter") + " confirm  " + styleDim.Render("n/esc") + " cancel")
 	return sb.String()
@@ -1645,6 +1812,52 @@ func (m OrchestrateModel) bootstrapServiceByID(id string) bootstrapService {
 		}
 	}
 	return bootstrapService{id: id, name: id}
+}
+
+// blockedBy returns a map of svcID → blocking dep ID for services whose deps
+// aren't yet OK or skipped. Deps are advisory — blocking is visual only.
+func (m OrchestrateModel) blockedBy() map[string]string {
+	statusByID := make(map[string]bsvcStatus, len(m.bootstrapServices))
+	for _, svc := range m.bootstrapServices {
+		statusByID[svc.id] = svc.status
+	}
+	blocked := map[string]string{}
+	for id, spec := range bootstrapSpecs {
+		for _, dep := range spec.deps {
+			if s := statusByID[dep]; s != bsvcOK && s != bsvcSkipped {
+				blocked[id] = dep
+				break
+			}
+		}
+	}
+	return blocked
+}
+
+// ReloadConfig updates the orch model's clients and cfg after a provision has
+// written a new service URL to config.toml. All existing bootstrap state is
+// preserved; only the specified client pointers are replaced when non-nil.
+func (m OrchestrateModel) ReloadConfig(cfg config.Config,
+	salt *api.SaltClient, dns *api.TechnitiumClient, ca *api.StepCAClient,
+	truenas *api.TrueNASClient, hermes *api.HermesClient,
+) OrchestrateModel {
+	m.cfg = cfg
+	if salt != nil {
+		m.saltClient = salt
+		m.saltCfg = cfg.Salt
+	}
+	if dns != nil {
+		m.dnsClient = dns
+	}
+	if ca != nil {
+		m.caClient = ca
+	}
+	if truenas != nil {
+		m.truenas = truenas
+	}
+	if hermes != nil {
+		m.hermesClient = hermes
+	}
+	return m
 }
 
 func (m OrchestrateModel) viewConfirm() string {

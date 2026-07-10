@@ -445,6 +445,41 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openOrchestrateMsg:
 		return a.switchSection(screenOrchestrate)
 
+	case orchReloadClientMsg:
+		// A bootstrap service was just provisioned and its URL written to config.toml.
+		// Rebuild the specific API client and refresh the live orch model copy.
+		a.cfg = msg.updatedCfg
+		var (
+			newSalt    *api.SaltClient
+			newDNS     *api.TechnitiumClient
+			newCA      *api.StepCAClient
+			newTrueNAS *api.TrueNASClient
+			newHermes  *api.HermesClient
+		)
+		switch msg.id {
+		case "salt_master":
+			if sc, err := api.NewSaltClient(a.cfg.Salt); err == nil {
+				a.saltClient = sc
+				newSalt = sc
+			}
+		case "dns":
+			newDNS = api.NewTechnitiumClient(a.cfg.Technitium)
+			a.dnsClient = newDNS
+		case "certs":
+			newCA = api.NewStepCAClient(a.cfg.StepCA)
+			a.caClient = newCA
+		case "truenas":
+			newTrueNAS = api.NewTrueNASClient(a.cfg.TrueNAS.URL, a.cfg.TrueNAS.APIKey, a.cfg.TrueNAS.Insecure)
+			a.trueNASClient = newTrueNAS
+		case "hermes":
+			if a.cfg.Hermes.URL != "" {
+				newHermes = api.NewHermesClient(a.cfg.Hermes.URL, a.cfg.Hermes.APIKey, a.cfg.Hermes.Insecure)
+				a.hermesClient = newHermes
+			}
+		}
+		a.orch = a.orch.ReloadConfig(a.cfg, newSalt, newDNS, newCA, newTrueNAS, newHermes)
+		return a, a.orch.checkSvcCmd(msg.id)
+
 	case minionSelectedMsg:
 		a.screen = screenSaltDetail
 		a.saltDetail = NewSaltDetailModel(a.saltClient, msg.minion, a.database)

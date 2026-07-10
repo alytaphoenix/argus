@@ -18,6 +18,19 @@ import (
 )
 
 func main() {
+	// ratataskr config — launch the interactive config editor.
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		rawCfg, _ := config.Load() // load without Keychain overlay; errors are non-fatal
+		if rawCfg == nil {
+			rawCfg = &config.Config{}
+		}
+		if err := ui.RunConfigEditor(rawCfg); err != nil {
+			fmt.Fprintf(os.Stderr, "config editor error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	cfg, err := loadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config error: %v\n", err)

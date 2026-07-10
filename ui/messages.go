@@ -2,6 +2,7 @@ package ui
 
 import (
 	"github.com/alytaphoenix/ratataskr/api"
+	"github.com/alytaphoenix/ratataskr/config"
 	"github.com/alytaphoenix/ratataskr/db"
 )
 
@@ -460,4 +461,12 @@ type orchSvcProvisionDoneMsg struct {
 	jid          string
 	failedStates []string
 	err          error
+}
+
+// orchReloadClientMsg is emitted by OrchestrateModel after a successful provision
+// writes a new service URL to config.toml. App.Update handles it by rebuilding
+// the relevant API client and updating the orch model's copy.
+type orchReloadClientMsg struct {
+	id         string        // bootstrap service ID that was provisioned
+	updatedCfg config.Config // cfg with new URL patched in (keychain fields preserved)
 }
