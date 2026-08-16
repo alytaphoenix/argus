@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/db"
 )
 
 type profilesTab int
@@ -331,7 +331,7 @@ func (m ProfilesModel) deleteSelected() (ProfilesModel, tea.Cmd) {
 func (m ProfilesModel) View() string {
 	var sb strings.Builder
 
-	sb.WriteString(styleTitle.Render("⚡ ratataskr") +
+	sb.WriteString(styleTitle.Render("⚡ argus") +
 		styleDim.Render(" › ") +
 		styleBold.Render("profiles & history") + "\n\n")
 

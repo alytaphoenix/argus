@@ -10,9 +10,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/config"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/config"
+	"github.com/alytaphoenix/argus/db"
 )
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ type plexServiceState struct {
 	Checked  bool
 	Loading  bool
 	Status   *api.ServarrStatus
-	Enabled  bool   // configured in ratataskr config
+	Enabled  bool   // configured in argus config
 	VMID     int    // Proxmox VMID if known
 	VMNode   string
 }

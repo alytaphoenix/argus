@@ -9,9 +9,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/config"
-	gkr "github.com/alytaphoenix/ratataskr/keyring"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/config"
+	gkr "github.com/alytaphoenix/argus/keyring"
 )
 
 const (
@@ -152,7 +152,7 @@ func setupTestCmd(host, username, password string, insecure bool) tea.Cmd {
 
 func (m SetupModel) View() string {
 	var b strings.Builder
-	b.WriteString(styleTitle.Render("ratataskr setup") + "\n\n")
+	b.WriteString(styleTitle.Render("argus setup") + "\n\n")
 	b.WriteString(styleDim.Render("Proxmox is not configured. Enter the connection details below;") + "\n")
 	b.WriteString(styleDim.Render("everything else is discovered from the cluster at runtime.") + "\n")
 	if m.reason != "" {

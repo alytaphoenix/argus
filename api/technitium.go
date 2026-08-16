@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alytaphoenix/ratataskr/config"
+	"github.com/alytaphoenix/argus/config"
 )
 
 // TechnitiumClient talks to the Technitium DNS Server REST API.

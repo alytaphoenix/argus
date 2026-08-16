@@ -12,8 +12,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/db"
 )
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────

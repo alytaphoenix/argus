@@ -1,9 +1,9 @@
 package ui
 
 import (
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/config"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/config"
+	"github.com/alytaphoenix/argus/db"
 )
 
 // Proxmox messages

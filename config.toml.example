@@ -1,9 +1,9 @@
-# Copy to ~/.config/ratataskr/config.toml
+# Copy to ~/.config/argus/config.toml
 # Env vars: PROXMOX_HOST, PROXMOX_TOKEN_ID, PROXMOX_SECRET, PROXMOX_USERNAME, PROXMOX_PASSWORD
-#           RATATASKR_SSH_USER, RATATASKR_SSH_KEY, RATATASKR_DOMAIN, RATATASKR_TIMEZONE
+#           ARGUS_SSH_USER, ARGUS_SSH_KEY, ARGUS_DOMAIN, ARGUS_TIMEZONE
 #           SALT_URL, SALT_USERNAME, SALT_PASSWORD
 #           NOMAD_URL, NOMAD_TOKEN
-#           PROMETHEUS_URL, PROMETHEUS_TOKEN, RATATASKR_METRICS_LISTEN
+#           PROMETHEUS_URL, PROMETHEUS_TOKEN, ARGUS_METRICS_LISTEN
 #           TECHNITIUM_URL, TECHNITIUM_TOKEN
 #           STEPCA_URL
 #           TRUENAS_URL, TRUENAS_API_KEY
@@ -15,7 +15,7 @@
 #   Token auth (recommended): set token_id + secret
 #   Ticket auth: set username + password (e.g. "root@pam"); takes priority over token
 host     = "https://pve.yourdomain.com:8006"
-token_id = "user@pam!ratataskr"   # Datacenter > Permissions > API Tokens
+token_id = "user@pam!argus"   # Datacenter > Permissions > API Tokens
 secret   = ""                    # leave empty — store in Keychain via Keys screen
 username = ""                    # e.g. "root@pam" for ticket auth instead of token
 password = ""                    # leave empty — store in Keychain (key: proxmox_password)
@@ -23,7 +23,7 @@ insecure = true                  # skip TLS verify for self-signed certs
 
 # Global defaults — applied across all integrations
 # These propagate to sub-sections if those fields are not already set.
-# Env vars: RATATASKR_SSH_USER, RATATASKR_SSH_KEY, RATATASKR_DOMAIN, RATATASKR_TIMEZONE
+# Env vars: ARGUS_SSH_USER, ARGUS_SSH_KEY, ARGUS_DOMAIN, ARGUS_TIMEZONE
 [globals]
 ssh_user    = "alyta"        # default SSH username for all node connections
 ssh_key     = ""             # path to SSH private key (leave empty to use ssh-agent)
@@ -33,9 +33,9 @@ admin_email = ""             # operator email for cert SANs / notifications
 
 # Salt — optional; omit to disable the minions screen (m)
 # master_minion: the minion ID of your salt-master host (usually its hostname).
-# Required for 'w' (service wiring) in the Services screen — ratataskr writes pillar
+# Required for 'w' (service wiring) in the Services screen — argus writes pillar
 # files to the master by running cmd.run on this minion.
-# Add to /srv/pillar/top.sls: base: '<master_minion>': [ratataskr_services]
+# Add to /srv/pillar/top.sls: base: '<master_minion>': [argus_services]
 [salt]
 url           = "https://salt.yourdomain.com:8000"
 username      = "saltapi"
@@ -78,11 +78,11 @@ url   = "http://matchbox.yourdomain.com:8080"
 token = ""  # optional Bearer token if Matchbox is behind an auth proxy
 
 # CrowdSec — optional; enables the Security → CrowdSec tab
-# Get LAPI key: cscli bouncers add ratataskr
+# Get LAPI key: cscli bouncers add argus
 # Env vars: CROWDSEC_URL, CROWDSEC_API_KEY
 [crowdsec]
 url     = "http://localhost:8080"  # CrowdSec Local API address
-api_key = ""                       # from: cscli bouncers add ratataskr
+api_key = ""                       # from: cscli bouncers add argus
 
 # TrueNAS — optional; enables the Services → TrueNAS tab
 # Monitors ZFS pools, datasets, alerts, and running services.
@@ -139,13 +139,13 @@ insecure = false
 
 # Prometheus / Metrics — optional
 # url    — Prometheus server to query in the Metrics screen (tab: Metrics)
-# listen — ratataskr's own /metrics server; scrape at http://host:9099/metrics
+# listen — argus's own /metrics server; scrape at http://host:9099/metrics
 #          leave empty to disable
-# Env vars: PROMETHEUS_URL, PROMETHEUS_TOKEN, RATATASKR_METRICS_LISTEN
+# Env vars: PROMETHEUS_URL, PROMETHEUS_TOKEN, ARGUS_METRICS_LISTEN
 [prometheus]
 url    = "http://prometheus.yourdomain.com:9090"
 token  = ""       # Bearer token if Prometheus auth is enabled
-listen = ":9099"  # bind address for ratataskr's own Prometheus metrics endpoint
+listen = ":9099"  # bind address for argus's own Prometheus metrics endpoint
 
 # Plex Media Server — optional; enables the Plex screen (tab: Plex)
 # token: get your X-Plex-Token from https://support.plex.tv/articles/204059436

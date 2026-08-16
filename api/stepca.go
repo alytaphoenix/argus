@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/alytaphoenix/ratataskr/config"
+	"github.com/alytaphoenix/argus/config"
 )
 
 // StepCAClient talks to a Smallstep step-ca server.

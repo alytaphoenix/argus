@@ -1,6 +1,6 @@
 package api
 
-// WiringStateTemplate is the Salt/Jinja state pushed to the master by ratataskr
+// WiringStateTemplate is the Salt/Jinja state pushed to the master by argus
 // (Services screen → w). Deploy target: /srv/salt/services/wiring.sls.
 //
 // Required master pillar keys (add to your pillar):
@@ -12,13 +12,13 @@ package api
 // Add to /srv/pillar/top.sls:
 //   base:
 //     '<master_minion>':
-//       - ratataskr_services
+//       - argus_services
 //
 // Apply: salt '<master_minion>' state.apply services.wiring
-const WiringStateTemplate = `# services.wiring — managed by ratataskr
+const WiringStateTemplate = `# services.wiring — managed by argus
 # Regenerate pillar + re-apply with 'w' from the Services screen.
 #
-# Pillar shape (from /srv/pillar/ratataskr_services.sls):
+# Pillar shape (from /srv/pillar/argus_services.sls):
 #   services:
 #     gitea:
 #       host: 10.0.0.5
@@ -97,10 +97,10 @@ const WiringStateTemplate = `# services.wiring — managed by ratataskr
 `
 
 // NASMountTemplate is a Salt/Jinja state that mounts TrueNAS NFS shares on a
-// minion. It reads from the cluster pillar key "storage" which ratataskr
+// minion. It reads from the cluster pillar key "storage" which argus
 // populates via the Orchestrate → Pillar screen (t = sync TrueNAS, p = push).
 //
-// Required pillar structure (in /srv/pillar/ratataskr_cluster.sls):
+// Required pillar structure (in /srv/pillar/argus_cluster.sls):
 //   storage:
 //     tank_media:
 //       nfs_host: 192.168.1.10
@@ -109,7 +109,7 @@ const WiringStateTemplate = `# services.wiring — managed by ratataskr
 //       nfs_options: ro,noatime      # optional, defaults shown
 //
 // Apply: salt '<minion>' state.apply storage.nas_mounts
-const NASMountTemplate = `# storage.nas_mounts — managed by ratataskr
+const NASMountTemplate = `# storage.nas_mounts — managed by argus
 # Apply this state on any minion that needs TrueNAS NFS shares mounted.
 # Re-generate + push the cluster pillar from the Orchestrate screen first.
 

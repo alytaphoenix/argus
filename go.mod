@@ -1,4 +1,4 @@
-module github.com/alytaphoenix/ratataskr
+module github.com/alytaphoenix/argus
 
 go 1.25.0
 

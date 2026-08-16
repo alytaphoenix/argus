@@ -2,9 +2,14 @@ package keyring
 
 import "github.com/zalando/go-keyring"
 
-const service = "ratataskr"
+const service = "argus"
 
-// Credential keys stored under the "ratataskr" service.
+// legacyService is the pre-rename Keychain service name. Load transparently
+// falls back to it and migrates matching entries forward, so existing
+// ratataskr installs don't lose stored credentials across the rename.
+const legacyService = "ratataskr"
+
+// Credential keys stored under the "argus" service.
 const (
 	KeyProxmoxSecret   = "proxmox_secret"
 	KeyProxmoxPassword = "proxmox_password"
@@ -34,17 +39,28 @@ func Save(key, value string) error {
 	return keyring.Set(service, key, value)
 }
 
+// Load reads key from the Keychain. If it's missing under the current
+// service, it falls back to the legacy "ratataskr" service and, on a hit,
+// best-effort copies the value forward so future lookups skip the fallback.
 func Load(key string) (string, error) {
-	return keyring.Get(service, key)
+	v, err := keyring.Get(service, key)
+	if err == nil {
+		return v, nil
+	}
+	if v, legacyErr := keyring.Get(legacyService, key); legacyErr == nil {
+		_ = keyring.Set(service, key, v)
+		return v, nil
+	}
+	return "", err
 }
 
 func Delete(key string) error {
 	return keyring.Delete(service, key)
 }
 
-// IsSet returns true if the key exists in the keychain.
+// IsSet returns true if the key exists in the keychain (current or legacy service).
 func IsSet(key string) bool {
-	_, err := keyring.Get(service, key)
+	_, err := Load(key)
 	return err == nil
 }
 
@@ -52,7 +68,7 @@ func IsSet(key string) bool {
 // Values already set (config file or env) are never overwritten.
 func Overlay(target *string, key string) {
 	if *target == "" {
-		if v, err := keyring.Get(service, key); err == nil {
+		if v, err := Load(key); err == nil {
 			*target = v
 		}
 	}

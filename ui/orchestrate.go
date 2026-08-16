@@ -10,9 +10,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/config"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/config"
+	"github.com/alytaphoenix/argus/db"
 )
 
 // bsvcStatus represents the live check status of one bootstrap service.
@@ -342,9 +342,9 @@ func applySaltProfile(ctx context.Context, saltClient *api.SaltClient, database 
 
 	// Write per-profile pillar to master if configured.
 	if profile.PillarYAML != "" && cfg.MasterMinion != "" {
-		header := fmt.Sprintf("# managed by ratataskr — profile: %s\n", profile.Name)
+		header := fmt.Sprintf("# managed by argus — profile: %s\n", profile.Name)
 		if wErr := saltClient.WritePillar(ctx, cfg.MasterMinion, cfg.PillarBase,
-			"ratataskr_profiles/"+profile.Name, header+profile.PillarYAML); wErr != nil {
+			"argus_profiles/"+profile.Name, header+profile.PillarYAML); wErr != nil {
 			failedStates = append(failedStates, "pillar write: "+wErr.Error())
 		}
 	}
@@ -426,7 +426,7 @@ func (m OrchestrateModel) pushClusterPillarCmd() tea.Cmd {
 		if err != nil {
 			return orchPillarPushedMsg{err: err}
 		}
-		err = saltClient.WritePillar(ctx, saltCfg.MasterMinion, saltCfg.PillarBase, "ratataskr_cluster", yaml)
+		err = saltClient.WritePillar(ctx, saltCfg.MasterMinion, saltCfg.PillarBase, "argus_cluster", yaml)
 		return orchPillarPushedMsg{err: err}
 	}
 }
@@ -487,7 +487,7 @@ func (m OrchestrateModel) checkSvcCmd(id string) tea.Cmd {
 		switch id {
 		case "salt_master":
 			if cfg.Salt.URL == "" {
-				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "add [salt] url + password via ratataskr config"}
+				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "add [salt] url + password via argus config"}
 			}
 			if salt == nil {
 				return orchSvcCheckDoneMsg{id: id, status: "notconfigured", detail: "client not initialised — set [salt] credentials"}
@@ -667,7 +667,7 @@ func pushPillarIfConfigured(database *db.DB, salt *api.SaltClient, saltCfg confi
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if yaml, err := database.GenerateClusterPillarYAML(); err == nil {
-		_ = salt.WritePillar(ctx, saltCfg.MasterMinion, saltCfg.PillarBase, "ratataskr_cluster", yaml)
+		_ = salt.WritePillar(ctx, saltCfg.MasterMinion, saltCfg.PillarBase, "argus_cluster", yaml)
 	}
 }
 
@@ -1136,14 +1136,14 @@ func (m OrchestrateModel) handleKey(msg tea.KeyMsg) (OrchestrateModel, tea.Cmd) 
 			switch svc.status {
 			case bsvcNotConfigured:
 				if svc.id == "salt_master" {
-					m.notice = "Run: ratataskr config — set [salt] url + password in the Salt section, then press x to re-check"
+					m.notice = "Run: argus config — set [salt] url + password in the Salt section, then press x to re-check"
 				} else {
-					m.notice = "Add configuration for " + svc.name + " to config.toml first (run: ratataskr config)"
+					m.notice = "Add configuration for " + svc.name + " to config.toml first (run: argus config)"
 				}
 			case bsvcMissing:
 				opts := []string{"Provision via Salt", "Skip"}
 				if svc.id == "salt_master" {
-					opts = []string{"Configure in ratataskr config", "Skip"}
+					opts = []string{"Configure in argus config", "Skip"}
 				}
 				m.bsvcActionDialog = &orchBootstrapActionDialog{
 					service: svc.id,
@@ -1310,8 +1310,8 @@ func (m OrchestrateModel) executeBootstrapAction(svcID, opt string) (Orchestrate
 				break
 			}
 		}
-	case opt == "Configure in ratataskr config":
-		m.notice = "Run: ratataskr config — fill the Salt section, save, then press x to re-check"
+	case opt == "Configure in argus config":
+		m.notice = "Run: argus config — fill the Salt section, save, then press x to re-check"
 	case opt == "Provision via Salt" || opt == "Re-apply Salt state":
 		m.provisionForm = newProvisionForm("", "services."+svcID, m.knownMinions())
 		m.provisioningFor = svcID
@@ -1479,7 +1479,7 @@ func (m OrchestrateModel) renderTabBar() string {
 }
 
 func (m OrchestrateModel) View() string {
-	title := styleTitle.Render("⚡ ratataskr") + " › " + styleBold.Render("orchestrate")
+	title := styleTitle.Render("⚡ argus") + " › " + styleBold.Render("orchestrate")
 	tabs := m.renderTabBar()
 
 	var status string
@@ -1651,7 +1651,7 @@ func (m OrchestrateModel) viewPillar() string {
 	if pillarBase == "" {
 		pillarBase = "/srv/pillar"
 	}
-	hint := fmt.Sprintf("Add to %s/top.sls:\n  base:\n    '*':\n      - ratataskr_cluster\n    '%s':\n      - ratataskr_profiles/<profile>", pillarBase, masterMinion)
+	hint := fmt.Sprintf("Add to %s/top.sls:\n  base:\n    '*':\n      - argus_cluster\n    '%s':\n      - argus_profiles/<profile>", pillarBase, masterMinion)
 	sb.WriteString(styleDim.Render(hint) + "\n\n")
 
 	if len(m.pillar) == 0 {

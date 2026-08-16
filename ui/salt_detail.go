@@ -11,8 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/db"
 )
 
 const (
@@ -342,7 +342,7 @@ func (m SaltDetailModel) View() string {
 	var sb strings.Builder
 	mn := m.minion
 
-	sb.WriteString(styleTitle.Render("⚡ ratataskr") +
+	sb.WriteString(styleTitle.Render("⚡ argus") +
 		styleDim.Render(" › ") +
 		styleBold.Render("salt") +
 		styleDim.Render(" › ") +
@@ -434,7 +434,7 @@ func (m SaltDetailModel) View() string {
 	// ── Local event log ────────────────────────────────────────────────────
 	if len(m.events) > 0 {
 		sb.WriteString("\n")
-		sb.WriteString(styleDim.Render("  Ratataskr apply log (last 10)") + "\n")
+		sb.WriteString(styleDim.Render("  Argus apply log (last 10)") + "\n")
 		sb.WriteString(styleDim.Render("  "+strings.Repeat("─", max(m.width-4, 60))) + "\n")
 		for _, ev := range m.events {
 			dot := styleRunning.Render("✓")

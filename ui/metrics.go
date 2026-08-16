@@ -11,9 +11,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/config"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/config"
+	"github.com/alytaphoenix/argus/db"
 )
 
 // metricsTab is one panel in the metrics screen.
@@ -23,7 +23,7 @@ const (
 	metricsTabOverview    metricsTab = iota // always from DB
 	metricsTabProxmox                       // pve-exporter via Prometheus
 	metricsTabNomad                         // Nomad native + Prometheus
-	metricsTabSalt                          // ratataskr DB + Prometheus
+	metricsTabSalt                          // argus DB + Prometheus
 	metricsTabAlerts                        // Prometheus alerting rules
 	metricsTabScrapeConfig                  // generated YAML
 	metricsTabLoki                          // Grafana Loki log browser
@@ -61,8 +61,8 @@ var saltQueries = []promQueryDef{
 	{"Online minions", `salt_minion_up`, "", 0},
 	{"Highstate runs (1h)", `increase(salt_function_calls_total{function="state.highstate"}[1h])`, "", 0},
 	{"Failed functions (1h)", `increase(salt_function_responses_total{success="false"}[1h])`, "", 0},
-	{"Ratataskr applies (24h)", `ratataskr_salt_applies_24h_total`, "", 0},
-	{"Ratataskr success %", `ratataskr_salt_apply_success_rate * 100`, "%", 100},
+	{"Argus applies (24h)", `argus_salt_applies_24h_total`, "", 0},
+	{"Argus success %", `argus_salt_apply_success_rate * 100`, "%", 100},
 }
 
 // promPanelResult holds the loaded samples for one query.
@@ -459,7 +459,7 @@ func (m *MetricsModel) enterTab(tab metricsTab) tea.Cmd {
 func (m MetricsModel) View() string {
 	var sb strings.Builder
 
-	sb.WriteString(styleTitle.Render("⚡ ratataskr") +
+	sb.WriteString(styleTitle.Render("⚡ argus") +
 		styleDim.Render(" › ") +
 		styleBold.Render("metrics") + "\n\n")
 
@@ -713,14 +713,14 @@ func (m MetricsModel) promPanelView(title string, tab metricsTab) string {
 // saltPanelView shows DB-derived salt metrics plus optional Prometheus queries.
 func (m MetricsModel) saltPanelView() string {
 	var sb strings.Builder
-	sb.WriteString(styleBold.Render("  Salt  (ratataskr DB + Prometheus)") + "\n\n")
+	sb.WriteString(styleBold.Render("  Salt  (argus DB + Prometheus)") + "\n\n")
 
 	// Always show DB stats first
 	if m.dbLoaded && m.snapshot != nil {
 		s := m.snapshot
 		barWidth := max(m.width/2-30, 20)
 
-		sb.WriteString(styleDim.Render("  From ratataskr DB") + "\n")
+		sb.WriteString(styleDim.Render("  From argus DB") + "\n")
 		sb.WriteString(styleDim.Render("  "+strings.Repeat("─", max(m.width-6, 40))) + "\n")
 		sb.WriteString(fmt.Sprintf("  %-28s %d\n", "Applies (24h)", s.SaltApplies24h))
 
@@ -1001,15 +1001,15 @@ func generateScrapeConfigUI(cfg config.Config) string {
 	pveHost := strings.TrimPrefix(strings.TrimPrefix(cfg.Host, "https://"), "http://")
 	pveHost = strings.SplitN(pveHost, "/", 2)[0]
 
-	sb.WriteString("# Prometheus scrape configuration for ratataskr homelab\n")
+	sb.WriteString("# Prometheus scrape configuration for argus homelab\n")
 	sb.WriteString("# Copy into your prometheus.yml under scrape_configs:\n\n")
 
 	sb.WriteString("scrape_configs:\n\n")
 
-	sb.WriteString("  # ── Ratataskr metrics server ────────────────────────────────────\n")
+	sb.WriteString("  # ── Argus metrics server ────────────────────────────────────\n")
 	sb.WriteString("  # Exposes: provisioned VMs, salt apply rates, nomad job history\n")
-	sb.WriteString("  # Start:   ratataskr-metrics-server   (built with: make build-metrics)\n")
-	sb.WriteString("  - job_name: ratataskr\n")
+	sb.WriteString("  # Start:   argus-metrics-server   (built with: make build-metrics)\n")
+	sb.WriteString("  - job_name: argus\n")
 	sb.WriteString("    static_configs:\n")
 	sb.WriteString("      - targets: [" + host + "]\n\n")
 

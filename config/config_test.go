@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-// TestMain isolates the package from a real ~/.config/ratataskr/config.toml.
-// Tests that need a file set RATATASKR_CONFIG to their own temp path.
+// TestMain isolates the package from a real ~/.config/argus/config.toml.
+// Tests that need a file set ARGUS_CONFIG to their own temp path.
 func TestMain(m *testing.M) {
-	os.Setenv("RATATASKR_CONFIG", filepath.Join(os.TempDir(), "ratataskr-test-nonexistent.toml"))
+	os.Setenv("ARGUS_CONFIG", filepath.Join(os.TempDir(), "argus-test-nonexistent.toml"))
 	os.Exit(m.Run())
 }
 
@@ -244,7 +244,7 @@ func TestLoadGlobalsEnvOverrides(t *testing.T) {
 func TestLoadFromFile(t *testing.T) {
 	// Write a minimal config to a temp file, then point Load at it via HOME override.
 	dir := t.TempDir()
-	cfgDir := filepath.Join(dir, ".config", "ratataskr")
+	cfgDir := filepath.Join(dir, ".config", "argus")
 	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -282,7 +282,7 @@ api_key = "radarrkey"
 
 	// Point Load at our test config; ensure no env vars interfere.
 	cleanup := setEnv(t,
-		"RATATASKR_CONFIG", cfgFile,
+		"ARGUS_CONFIG", cfgFile,
 		"PROXMOX_HOST", "",
 		"PROXMOX_TOKEN_ID", "",
 		"PROXMOX_SECRET", "",
@@ -361,7 +361,7 @@ func TestSaltWiringConfigDefaults(t *testing.T) {
 
 func TestSaltWiringConfigFromFile(t *testing.T) {
 	dir := t.TempDir()
-	cfgDir := filepath.Join(dir, ".config", "ratataskr")
+	cfgDir := filepath.Join(dir, ".config", "argus")
 	os.MkdirAll(cfgDir, 0o700)
 	os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(`
 host     = "https://pve:8006"
@@ -378,7 +378,7 @@ state_base    = "/data/salt"
 `), 0o600)
 
 	cleanup := setEnv(t,
-		"RATATASKR_CONFIG", filepath.Join(cfgDir, "config.toml"),
+		"ARGUS_CONFIG", filepath.Join(cfgDir, "config.toml"),
 		"PROXMOX_HOST", "", "PROXMOX_TOKEN_ID", "", "PROXMOX_SECRET", "",
 	)
 	defer cleanup()
@@ -401,7 +401,7 @@ state_base    = "/data/salt"
 func TestSaveProxmoxSetup(t *testing.T) {
 	cfgFile := filepath.Join(t.TempDir(), "config.toml")
 	cleanup := setEnv(t,
-		"RATATASKR_CONFIG", cfgFile,
+		"ARGUS_CONFIG", cfgFile,
 		"PROXMOX_HOST", "", "PROXMOX_TOKEN_ID", "", "PROXMOX_SECRET", "",
 		"PROXMOX_USERNAME", "", "PROXMOX_PASSWORD", "",
 	)
@@ -441,7 +441,7 @@ func TestSaveProxmoxSetup(t *testing.T) {
 func TestSaveConfigRoundTrip(t *testing.T) {
 	cfgFile := filepath.Join(t.TempDir(), "config.toml")
 	cleanup := setEnv(t,
-		"RATATASKR_CONFIG", cfgFile,
+		"ARGUS_CONFIG", cfgFile,
 		"PROXMOX_HOST", "", "PROXMOX_TOKEN_ID", "", "PROXMOX_SECRET", "",
 		"PROXMOX_USERNAME", "", "PROXMOX_PASSWORD", "",
 	)
@@ -697,7 +697,7 @@ func TestSaveConfigMinimalRoundTrip(t *testing.T) {
 	// A minimal save (just Proxmox host) must not emit [globals]/[defaults] noise.
 	cfgFile := filepath.Join(t.TempDir(), "config.toml")
 	cleanup := setEnv(t,
-		"RATATASKR_CONFIG", cfgFile,
+		"ARGUS_CONFIG", cfgFile,
 		"PROXMOX_HOST", "", "PROXMOX_TOKEN_ID", "", "PROXMOX_SECRET", "",
 		"PROXMOX_USERNAME", "", "PROXMOX_PASSWORD", "",
 	)
@@ -749,7 +749,7 @@ func TestValidateTicketAuth(t *testing.T) {
 func TestLoadEnvOverridesFileValues(t *testing.T) {
 	// Write a config file, then override with env vars.
 	dir := t.TempDir()
-	cfgDir := filepath.Join(dir, ".config", "ratataskr")
+	cfgDir := filepath.Join(dir, ".config", "argus")
 	os.MkdirAll(cfgDir, 0o700)
 	os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(`
 host     = "https://file-host:8006"
@@ -758,7 +758,7 @@ secret   = "file-secret"
 `), 0o600)
 
 	cleanup := setEnv(t,
-		"RATATASKR_CONFIG", filepath.Join(cfgDir, "config.toml"),
+		"ARGUS_CONFIG", filepath.Join(cfgDir, "config.toml"),
 		"PROXMOX_HOST", "https://env-host:8006",
 		"PROXMOX_TOKEN_ID", "",
 		"PROXMOX_SECRET", "",

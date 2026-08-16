@@ -1,7 +1,7 @@
-// ratataskr-mcp-server exposes all ratataskr operations as MCP tools so Claude can
+// argus-mcp-server exposes all argus operations as MCP tools so Claude can
 // call them directly. Run it as an MCP stdio server:
 //
-//	claude mcp add ratataskr -- /path/to/ratataskr-mcp-server
+//	claude mcp add argus -- /path/to/argus-mcp-server
 package main
 
 import (
@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/config"
-	gkr "github.com/alytaphoenix/ratataskr/keyring"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/config"
+	gkr "github.com/alytaphoenix/argus/keyring"
 )
 
 // ── JSON-RPC 2.0 wire types ──────────────────────────────────────────────────
@@ -1373,7 +1373,7 @@ func servarrNames(m map[string]*api.ServarrClient) string {
 
 func main() {
 	log.SetOutput(os.Stderr)
-	log.SetPrefix("[ratataskr-mcp] ")
+	log.SetPrefix("[argus-mcp] ")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -1477,7 +1477,7 @@ func main() {
 			resp = ok(req.ID, initResult{
 				ProtocolVersion: "2024-11-05",
 				Capabilities:    serverCaps{Tools: map[string]any{}},
-				ServerInfo:      serverInfo{Name: "ratataskr", Version: "1.0.0"},
+				ServerInfo:      serverInfo{Name: "argus", Version: "1.0.0"},
 			})
 
 		case "notifications/initialized":

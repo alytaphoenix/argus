@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/db"
 )
 
 type NodesModel struct {
@@ -152,7 +152,7 @@ func (m NodesModel) Update(msg tea.Msg) (NodesModel, tea.Cmd) {
 func (m NodesModel) View() string {
 	var sb strings.Builder
 
-	sb.WriteString(styleTitle.Render("⚡ ratataskr") + "  " + styleDim.Render("proxmox homelab") + "\n\n")
+	sb.WriteString(styleTitle.Render("⚡ argus") + "  " + styleDim.Render("proxmox homelab") + "\n\n")
 
 	if m.loading {
 		sb.WriteString("  " + m.spinner.View() + " loading nodes...\n")

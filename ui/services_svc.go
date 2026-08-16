@@ -10,8 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/db"
 )
 
 // ── Services tab ──────────────────────────────────────────────────────────────
@@ -132,7 +132,7 @@ func (m ServicesModel) registerHostCmd(host, rtype string, vmid int, vmNode stri
 				sev = "medium"
 			}
 			_ = database.RecordSecurityEvent(db.SecurityEvent{
-				Source:      "ratataskr",
+				Source:      "argus",
 				EventType:   "registration",
 				Severity:    sev,
 				Description: desc,
@@ -279,7 +279,7 @@ func (m ServicesModel) deleteServiceCmd(id int64) tea.Cmd {
 func (m ServicesModel) wiringApplyCmd() tea.Cmd {
 	saltClient := m.saltClient
 	masterMinion := m.masterMinion
-	pillarPath := m.pillarBase + "/ratataskr_services.sls"
+	pillarPath := m.pillarBase + "/argus_services.sls"
 	statePath := m.stateBase + "/services/wiring.sls"
 	pillarContent := m.allServicesPillarYAML()
 	return func() tea.Msg {
@@ -301,8 +301,8 @@ func (m ServicesModel) wiringApplyCmd() tea.Cmd {
 
 func (m ServicesModel) allServicesPillarYAML() string {
 	var sb strings.Builder
-	sb.WriteString("# ratataskr-managed — do not edit; regenerated with 'w' from the Services screen\n")
-	sb.WriteString("# Add to /srv/pillar/top.sls: base: '<master_minion>': [ratataskr_services]\n")
+	sb.WriteString("# argus-managed — do not edit; regenerated with 'w' from the Services screen\n")
+	sb.WriteString("# Add to /srv/pillar/top.sls: base: '<master_minion>': [argus_services]\n")
 	sb.WriteString("services:\n")
 	seen := map[string]bool{}
 	for _, svc := range m.services {

@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// SaveConfig writes cfg to the default config path (~/.config/ratataskr/config.toml).
+// SaveConfig writes cfg to the default config path (~/.config/argus/config.toml).
 // Secrets that live in the macOS Keychain (proxmox password/secret, salt password,
 // nomad/prometheus/loki/truenas/plex/ha/hermes/technitium/crowdsec/matchbox tokens,
 // and the Anthropic API key) are never written to file.
@@ -26,8 +26,8 @@ func SaveConfig(cfg *Config) error {
 
 func renderConfig(cfg *Config) string {
 	var b strings.Builder
-	fmt.Fprint(&b, "# ratataskr configuration\n")
-	fmt.Fprint(&b, "# Secrets live in the macOS Keychain — use the Keys screen (k) inside ratataskr.\n")
+	fmt.Fprint(&b, "# argus configuration\n")
+	fmt.Fprint(&b, "# Secrets live in the macOS Keychain — use the Keys screen (k) inside argus.\n")
 	fmt.Fprint(&b, "# See config.toml.example for full documentation and optional sections.\n\n")
 
 	// ── Proxmox (required) ──────────────────────────────────────────────────────

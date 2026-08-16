@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alytaphoenix/ratataskr/config"
+	"github.com/alytaphoenix/argus/config"
 )
 
 type NomadClient struct {

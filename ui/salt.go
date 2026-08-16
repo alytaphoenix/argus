@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/api"
+	"github.com/alytaphoenix/argus/api"
 )
 
 type SaltModel struct {
@@ -135,7 +135,7 @@ func (m SaltModel) Update(msg tea.Msg) (SaltModel, tea.Cmd) {
 func (m SaltModel) View() string {
 	var sb strings.Builder
 
-	sb.WriteString(styleTitle.Render("⚡ ratataskr") +
+	sb.WriteString(styleTitle.Render("⚡ argus") +
 		styleDim.Render(" › ") +
 		styleBold.Render("salt minions") + "\n\n")
 

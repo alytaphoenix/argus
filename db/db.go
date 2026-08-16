@@ -1,5 +1,5 @@
 // Package db provides a local SQLite store for tracking VM profiles and
-// provisioning history. The database lives at ~/.config/ratataskr/ratataskr.db.
+// provisioning history. The database lives at ~/.config/argus/argus.db.
 package db
 
 import (
@@ -13,12 +13,12 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// DB wraps a SQLite connection with all ratataskr-specific queries.
+// DB wraps a SQLite connection with all argus-specific queries.
 type DB struct {
 	sql *sql.DB
 }
 
-// Open opens (or creates) the ratataskr database.
+// Open opens (or creates) the argus database.
 func Open() (*DB, error) {
 	path, err := defaultPath()
 	if err != nil {
@@ -27,6 +27,7 @@ func Open() (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
+	migrateLegacyDB(path)
 	conn, err := sql.Open("sqlite", path+"?_journal=WAL&_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
@@ -46,7 +47,39 @@ func defaultPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return filepath.Join(home, ".config", "argus", "argus.db"), nil
+}
+
+// legacyPath returns the pre-rename database location (~/.config/ratataskr/ratataskr.db).
+func legacyPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
 	return filepath.Join(home, ".config", "ratataskr", "ratataskr.db"), nil
+}
+
+// migrateLegacyDB copies the SQLite file (plus WAL/SHM sidecars, if present)
+// from the pre-rename location to path, if path doesn't exist yet. Best-effort;
+// the old files are left in place.
+func migrateLegacyDB(path string) {
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	old, err := legacyPath()
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(old); err != nil {
+		return
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		data, err := os.ReadFile(old + suffix)
+		if err != nil {
+			continue
+		}
+		_ = os.WriteFile(path+suffix, data, 0o600)
+	}
 }
 
 func (d *DB) migrate() error {
@@ -955,7 +988,7 @@ func (d *DB) DeleteClusterPillarKey(key string) error {
 }
 
 // GenerateClusterPillarYAML builds a YAML string from all cluster pillar
-// entries suitable for writing to /srv/pillar/ratataskr_cluster.sls.
+// entries suitable for writing to /srv/pillar/argus_cluster.sls.
 // Each entry's Value is treated as a YAML block indented under its Key.
 func (d *DB) GenerateClusterPillarYAML() (string, error) {
 	entries, err := d.ClusterPillar()
@@ -963,7 +996,7 @@ func (d *DB) GenerateClusterPillarYAML() (string, error) {
 		return "", err
 	}
 	var sb strings.Builder
-	sb.WriteString("# managed by ratataskr — push from Orchestrate → Pillar\n")
+	sb.WriteString("# managed by argus — push from Orchestrate → Pillar\n")
 	for _, e := range entries {
 		sb.WriteString(e.Key + ":\n")
 		for _, line := range strings.Split(strings.TrimRight(e.Value, "\n"), "\n") {
@@ -1262,7 +1295,7 @@ type ProfileCount struct {
 	Count int
 }
 
-// MetricsSnapshot is a point-in-time view of all ratataskr DB stats.
+// MetricsSnapshot is a point-in-time view of all argus DB stats.
 type MetricsSnapshot struct {
 	// Provisioned VMs
 	ProvisionedTotal int
@@ -2037,7 +2070,7 @@ type ServiceHost struct {
 	VMID             int
 	Node             string
 	Managed          bool   // true = managed mode (Salt + security agents)
-	Registered       bool   // true = onboarded into ratataskr
+	Registered       bool   // true = onboarded into argus
 	ProvisionPending bool   // true = provision has been requested
 	RegistrationType string // "managed" | "unmanaged"
 	SaltApplied      bool

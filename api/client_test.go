@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/alytaphoenix/ratataskr/config"
+	"github.com/alytaphoenix/argus/config"
 )
 
 func TestTicketAuth(t *testing.T) {

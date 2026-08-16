@@ -11,9 +11,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/config"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/config"
+	"github.com/alytaphoenix/argus/db"
 )
 
 const (
@@ -323,7 +323,7 @@ func (m ProvisionModel) Update(msg tea.Msg) (ProvisionModel, tea.Cmd) {
 func (m ProvisionModel) View() string {
 	var sb strings.Builder
 
-	sb.WriteString(styleTitle.Render("⚡ ratataskr") +
+	sb.WriteString(styleTitle.Render("⚡ argus") +
 		styleDim.Render(" › ") +
 		styleBold.Render(m.node.Name) +
 		styleDim.Render(" › ") +

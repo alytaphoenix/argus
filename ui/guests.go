@@ -11,8 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/db"
 )
 
 type confirmKind int
@@ -342,7 +342,7 @@ func (m GuestsModel) doBulkAction(action string) tea.Cmd {
 func (m GuestsModel) View() string {
 	var sb strings.Builder
 
-	breadcrumb := styleTitle.Render("⚡ ratataskr") +
+	breadcrumb := styleTitle.Render("⚡ argus") +
 		styleDim.Render(" › ") +
 		styleBold.Render(m.node.Name)
 	sb.WriteString(breadcrumb + "\n\n")

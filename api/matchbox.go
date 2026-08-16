@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alytaphoenix/ratataskr/config"
+	"github.com/alytaphoenix/argus/config"
 )
 
 // MatchboxClient talks to a Matchbox PXE provisioning server.

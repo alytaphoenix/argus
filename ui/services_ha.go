@@ -8,7 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/api"
+	"github.com/alytaphoenix/argus/api"
 )
 
 // ── Home Assistant tab ────────────────────────────────────────────────────────

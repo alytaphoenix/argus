@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alytaphoenix/ratataskr/config"
+	"github.com/alytaphoenix/argus/config"
 )
 
 type SaltClient struct {
@@ -496,7 +496,7 @@ func (c *SaltClient) DeleteKey(ctx context.Context, minionID string) error {
 }
 
 // WritePillar writes a Salt pillar file to the master. name is a relative path
-// within pillarBase (e.g. "ratataskr_cluster" or "ratataskr_profiles/myprofile").
+// within pillarBase (e.g. "argus_cluster" or "argus_profiles/myprofile").
 // The .sls extension is appended automatically.
 func (c *SaltClient) WritePillar(ctx context.Context, masterMinion, pillarBase, name, content string) error {
 	if pillarBase == "" {

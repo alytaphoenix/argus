@@ -7,9 +7,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/config"
-	"github.com/alytaphoenix/ratataskr/db"
-	gkr "github.com/alytaphoenix/ratataskr/keyring"
+	"github.com/alytaphoenix/argus/config"
+	"github.com/alytaphoenix/argus/db"
+	gkr "github.com/alytaphoenix/argus/keyring"
 )
 
 type credRow struct {
@@ -283,7 +283,7 @@ func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 func (m CredentialsModel) View() string {
 	var sb strings.Builder
 
-	sb.WriteString(styleTitle.Render("⚡ ratataskr") +
+	sb.WriteString(styleTitle.Render("⚡ argus") +
 		styleDim.Render(" › ") +
 		styleBold.Render("credentials & keys") + "\n\n")
 

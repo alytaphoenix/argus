@@ -10,15 +10,15 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/config"
-	"github.com/alytaphoenix/ratataskr/db"
-	gkr "github.com/alytaphoenix/ratataskr/keyring"
-	"github.com/alytaphoenix/ratataskr/ui"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/config"
+	"github.com/alytaphoenix/argus/db"
+	gkr "github.com/alytaphoenix/argus/keyring"
+	"github.com/alytaphoenix/argus/ui"
 )
 
 func main() {
-	// ratataskr config — launch the interactive config editor.
+	// argus config — launch the interactive config editor.
 	if len(os.Args) > 1 && os.Args[1] == "config" {
 		rawCfg, _ := config.Load() // load without Keychain overlay; errors are non-fatal
 		if rawCfg == nil {
@@ -38,6 +38,10 @@ func main() {
 	}
 
 	// First-run setup: show the Proxmox config screen instead of bailing out.
+	// On success, the main app launches straight into the Bootstrap wizard so
+	// the rest of the homelab (Salt, DNS, certs, TrueNAS, Plex, ...) gets set
+	// up in the same sitting instead of requiring a second manual pass.
+	guidedSetup := false
 	if verr := cfg.Validate(); verr != nil {
 		done, err := ui.RunSetup(verr.Error())
 		if err != nil {
@@ -56,6 +60,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "config error: %v\n", err)
 			os.Exit(1)
 		}
+		guidedSetup = true
 	}
 
 	sshPassword, _ := gkr.Load(gkr.KeySSHPassword)
@@ -132,7 +137,7 @@ func main() {
 		ui.NewApp(proxmoxClient, saltClient, nomadClient, promClient, lokiClient,
 			dnsClient, caClient, claudeClient, matchboxClient, csClient, wazuhClient,
 			trueNASClient, plexClient, haClient, hermesClient,
-			sshUser, sshPassword, cfg.Defaults, *cfg, database),
+			sshUser, sshPassword, cfg.Defaults, *cfg, database, guidedSetup),
 		tea.WithAltScreen(),
 	)
 
@@ -189,7 +194,7 @@ func startMetricsServer(listen string, database *db.DB, cfg *config.Config) erro
 		writeMetricsText(w, snap)
 	})
 
-	log.Printf("ratataskr metrics listening on %s/metrics", listen)
+	log.Printf("argus metrics listening on %s/metrics", listen)
 	srv := &http.Server{
 		Addr:         listen,
 		Handler:      mux,
@@ -222,32 +227,32 @@ func writeMetricsText(w http.ResponseWriter, s *db.MetricsSnapshot) {
 		fmt.Fprintf(w, "%s{%s} %g %d\n", name, strings.Join(parts, ","), value, ts)
 	}
 
-	g("ratataskr_provisioned_vms_total", "Total provisioned VMs tracked", nil, float64(s.ProvisionedTotal))
+	g("argus_provisioned_vms_total", "Total provisioned VMs tracked", nil, float64(s.ProvisionedTotal))
 	for status, n := range s.VMsByStatus {
-		g("ratataskr_provisioned_vms_by_status", "Provisioned VMs by last known status",
+		g("argus_provisioned_vms_by_status", "Provisioned VMs by last known status",
 			map[string]string{"status": status}, float64(n))
 	}
-	g("ratataskr_salt_applies_24h_total", "Salt state.apply calls (last 24h)", nil, float64(s.SaltApplies24h))
-	g("ratataskr_salt_apply_successes_24h_total", "Successful salt applies (last 24h)", nil, float64(s.SaltSuccesses24h))
-	g("ratataskr_salt_apply_failures_24h_total", "Failed salt applies (last 24h)", nil, float64(s.SaltApplies24h-s.SaltSuccesses24h))
+	g("argus_salt_applies_24h_total", "Salt state.apply calls (last 24h)", nil, float64(s.SaltApplies24h))
+	g("argus_salt_apply_successes_24h_total", "Successful salt applies (last 24h)", nil, float64(s.SaltSuccesses24h))
+	g("argus_salt_apply_failures_24h_total", "Failed salt applies (last 24h)", nil, float64(s.SaltApplies24h-s.SaltSuccesses24h))
 	if s.SaltApplies24h > 0 {
-		g("ratataskr_salt_apply_success_rate", "Salt apply success rate 0-1 (last 24h)", nil,
+		g("argus_salt_apply_success_rate", "Salt apply success rate 0-1 (last 24h)", nil,
 			float64(s.SaltSuccesses24h)/float64(s.SaltApplies24h))
 	}
 	for minion, n := range s.SaltMinionActivity {
-		g("ratataskr_salt_minion_applies_24h_total", "Salt applies per minion (last 24h)",
+		g("argus_salt_minion_applies_24h_total", "Salt applies per minion (last 24h)",
 			map[string]string{"minion": minion}, float64(n))
 	}
-	g("ratataskr_nomad_jobs_running", "Nomad jobs with status=running", nil, float64(s.NomadJobsRunning))
-	g("ratataskr_nomad_jobs_dead", "Nomad jobs with status=dead", nil, float64(s.NomadJobsDead))
-	g("ratataskr_nomad_jobs_pending", "Nomad jobs with status=pending", nil, float64(s.NomadJobsPending))
-	g("ratataskr_nomad_job_events_today_total", "Nomad job state-change events today", nil, float64(s.NomadEventsToday))
+	g("argus_nomad_jobs_running", "Nomad jobs with status=running", nil, float64(s.NomadJobsRunning))
+	g("argus_nomad_jobs_dead", "Nomad jobs with status=dead", nil, float64(s.NomadJobsDead))
+	g("argus_nomad_jobs_pending", "Nomad jobs with status=pending", nil, float64(s.NomadJobsPending))
+	g("argus_nomad_job_events_today_total", "Nomad job state-change events today", nil, float64(s.NomadEventsToday))
 	for _, p := range s.TopCIProfiles {
-		g("ratataskr_cloud_init_profile_vms", "VMs per cloud-init profile",
+		g("argus_cloud_init_profile_vms", "VMs per cloud-init profile",
 			map[string]string{"profile": p.Name}, float64(p.Count))
 	}
 	for _, p := range s.TopSaltProfiles {
-		g("ratataskr_salt_profile_applies", "Salt applies per salt profile",
+		g("argus_salt_profile_applies", "Salt applies per salt profile",
 			map[string]string{"profile": p.Name}, float64(p.Count))
 	}
 }

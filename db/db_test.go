@@ -1157,7 +1157,7 @@ func TestGenerateClusterPillarYAML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("empty GenerateClusterPillarYAML: %v", err)
 	}
-	if yaml != "# managed by ratataskr — push from Orchestrate → Pillar\n" {
+	if yaml != "# managed by argus — push from Orchestrate → Pillar\n" {
 		t.Errorf("empty yaml unexpected: %q", yaml)
 	}
 

@@ -12,8 +12,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/db"
 )
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -926,7 +926,7 @@ func (m SecurityModel) viewCrowdSec(height int) string {
 	if m.csClient == nil {
 		b.WriteString(styleDim.Render("  CrowdSec not configured.\n"))
 		b.WriteString(styleDim.Render("  Set crowdsec.url and crowdsec.api_key in config.toml\n"))
-		b.WriteString(styleDim.Render("  Get the API key: cscli bouncers add ratataskr\n"))
+		b.WriteString(styleDim.Render("  Get the API key: cscli bouncers add argus\n"))
 		return b.String()
 	}
 

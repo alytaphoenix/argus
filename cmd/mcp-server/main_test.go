@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/alytaphoenix/ratataskr/api"
+	"github.com/alytaphoenix/argus/api"
 )
 
 // ── Helper function tests ─────────────────────────────────────────────────────

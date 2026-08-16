@@ -8,8 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/config"
-	gkr "github.com/alytaphoenix/ratataskr/keyring"
+	"github.com/alytaphoenix/argus/config"
+	gkr "github.com/alytaphoenix/argus/keyring"
 )
 
 // cfgField describes one editable row in the config editor.
@@ -31,7 +31,7 @@ type cfgSection struct {
 	fields []*cfgField
 }
 
-// ConfigEditorModel is a Bubbletea model for editing ~/.config/ratataskr/config.toml.
+// ConfigEditorModel is a Bubbletea model for editing ~/.config/argus/config.toml.
 type ConfigEditorModel struct {
 	cfg      *config.Config
 	sections []cfgSection
@@ -112,7 +112,7 @@ func buildCfgSections(cfg *config.Config) []cfgSection {
 				strField("host", "required: Proxmox VE API address", "https://pve.homelab.local:8006",
 					func(c *config.Config) string { return c.Host },
 					func(c *config.Config, v string) { c.Host = v }),
-				strField("token_id", "API token (Datacenter→Permissions→API Tokens)", "user@pam!ratataskr",
+				strField("token_id", "API token (Datacenter→Permissions→API Tokens)", "user@pam!argus",
 					func(c *config.Config) string { return c.TokenID },
 					func(c *config.Config, v string) { c.TokenID = v }),
 				secretField("secret", "API token secret — store via Keys screen", gkr.KeyProxmoxSecret),
@@ -229,7 +229,7 @@ func buildCfgSections(cfg *config.Config) []cfgSection {
 					func(c *config.Config) string { return c.Prometheus.URL },
 					func(c *config.Config, v string) { c.Prometheus.URL = v }),
 				secretField("prometheus token", "Bearer token if auth enabled", gkr.KeyPrometheusToken),
-				strField("prometheus listen", "bind address for ratataskr's own /metrics endpoint", ":9099",
+				strField("prometheus listen", "bind address for argus's own /metrics endpoint", ":9099",
 					func(c *config.Config) string { return c.Prometheus.Listen },
 					func(c *config.Config, v string) { c.Prometheus.Listen = v }),
 				strField("loki url", "Loki log query endpoint", "http://loki.homelab.local:3100",
@@ -247,7 +247,7 @@ func buildCfgSections(cfg *config.Config) []cfgSection {
 				strField("crowdsec url", "CrowdSec LAPI address", "http://localhost:8080",
 					func(c *config.Config) string { return c.CrowdSec.URL },
 					func(c *config.Config, v string) { c.CrowdSec.URL = v }),
-				secretField("crowdsec api_key", "cscli bouncers add ratataskr", gkr.KeyCrowdSecAPIKey),
+				secretField("crowdsec api_key", "cscli bouncers add argus", gkr.KeyCrowdSecAPIKey),
 				strField("wazuh url", "Wazuh REST API", "https://wazuh-manager.homelab.local:55000",
 					func(c *config.Config) string { return c.Wazuh.URL },
 					func(c *config.Config, v string) { c.Wazuh.URL = v }),
@@ -524,7 +524,7 @@ func (m ConfigEditorModel) View() string {
 	var b strings.Builder
 
 	// ── Title bar ───────────────────────────────────────────────────────────────
-	b.WriteString(styleTitle.Render("ratataskr config editor"))
+	b.WriteString(styleTitle.Render("argus config editor"))
 	if m.dirty {
 		b.WriteString("  " + stylePaused.Render("● unsaved"))
 	} else if m.saved {

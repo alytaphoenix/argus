@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/db"
 )
 
 // SettingsModel lets the user view and edit app-wide configurable settings

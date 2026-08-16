@@ -1,9 +1,9 @@
-// metrics-server exposes ratataskr's SQLite database as a Prometheus metrics
+// metrics-server exposes argus's SQLite database as a Prometheus metrics
 // endpoint and serves a generated Prometheus scrape-config snippet.
 //
-// Run alongside ratataskr:
+// Run alongside argus:
 //
-//	ratataskr-metrics-server   # reads config from ~/.config/ratataskr/config.toml
+//	argus-metrics-server   # reads config from ~/.config/argus/config.toml
 //
 // Prometheus scrape endpoint: GET /metrics
 // Generated scrape config:    GET /scrape-config
@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alytaphoenix/ratataskr/config"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/config"
+	"github.com/alytaphoenix/argus/db"
 )
 
 func main() {
@@ -63,7 +63,7 @@ func main() {
 		fmt.Fprintln(w, generateScrapeConfig(cfg))
 	})
 
-	log.Printf("ratataskr metrics server listening on %s", listen)
+	log.Printf("argus metrics server listening on %s", listen)
 	log.Printf("  /metrics       — Prometheus scrape endpoint")
 	log.Printf("  /scrape-config — Generated prometheus.yml snippet")
 	if err := http.ListenAndServe(listen, mux); err != nil {
@@ -94,82 +94,82 @@ func writeMetrics(w http.ResponseWriter, s *db.MetricsSnapshot) {
 	}
 
 	// ── Provisioned VMs ──────────────────────────────────────────────────
-	line("ratataskr_provisioned_vms_total",
-		"Total number of VMs tracked by ratataskr", "gauge",
+	line("argus_provisioned_vms_total",
+		"Total number of VMs tracked by argus", "gauge",
 		nil, float64(s.ProvisionedTotal))
 
-	repeat("ratataskr_provisioned_vms_by_status",
+	repeat("argus_provisioned_vms_by_status",
 		"Number of provisioned VMs by last known status", "gauge",
 		"status", s.VMsByStatus)
 
 	// ── Salt ─────────────────────────────────────────────────────────────
-	line("ratataskr_salt_applies_24h_total",
+	line("argus_salt_applies_24h_total",
 		"Salt state.apply invocations in the last 24 hours", "gauge",
 		nil, float64(s.SaltApplies24h))
 
-	line("ratataskr_salt_apply_successes_24h_total",
+	line("argus_salt_apply_successes_24h_total",
 		"Successful salt state.apply invocations in the last 24 hours", "gauge",
 		nil, float64(s.SaltSuccesses24h))
 
 	failures := s.SaltApplies24h - s.SaltSuccesses24h
-	line("ratataskr_salt_apply_failures_24h_total",
+	line("argus_salt_apply_failures_24h_total",
 		"Failed salt state.apply invocations in the last 24 hours", "gauge",
 		nil, float64(failures))
 
 	if s.SaltApplies24h > 0 {
 		rate := float64(s.SaltSuccesses24h) / float64(s.SaltApplies24h)
-		line("ratataskr_salt_apply_success_rate",
+		line("argus_salt_apply_success_rate",
 			"Fraction of salt applies that succeeded in the last 24 hours (0–1)", "gauge",
 			nil, rate)
 	}
 
-	repeat("ratataskr_salt_minion_applies_24h_total",
+	repeat("argus_salt_minion_applies_24h_total",
 		"Salt state.apply count per minion in the last 24 hours", "gauge",
 		"minion", s.SaltMinionActivity)
 
 	// ── Nomad ─────────────────────────────────────────────────────────────
-	fmt.Fprintf(w, "# HELP ratataskr_nomad_jobs_by_status Number of Nomad jobs by last known status\n")
-	fmt.Fprintf(w, "# TYPE ratataskr_nomad_jobs_by_status gauge\n")
-	fmt.Fprintf(w, "ratataskr_nomad_jobs_by_status{status=\"running\"} %d %d\n", s.NomadJobsRunning, ts)
-	fmt.Fprintf(w, "ratataskr_nomad_jobs_by_status{status=\"dead\"} %d %d\n", s.NomadJobsDead, ts)
-	fmt.Fprintf(w, "ratataskr_nomad_jobs_by_status{status=\"pending\"} %d %d\n", s.NomadJobsPending, ts)
+	fmt.Fprintf(w, "# HELP argus_nomad_jobs_by_status Number of Nomad jobs by last known status\n")
+	fmt.Fprintf(w, "# TYPE argus_nomad_jobs_by_status gauge\n")
+	fmt.Fprintf(w, "argus_nomad_jobs_by_status{status=\"running\"} %d %d\n", s.NomadJobsRunning, ts)
+	fmt.Fprintf(w, "argus_nomad_jobs_by_status{status=\"dead\"} %d %d\n", s.NomadJobsDead, ts)
+	fmt.Fprintf(w, "argus_nomad_jobs_by_status{status=\"pending\"} %d %d\n", s.NomadJobsPending, ts)
 
-	line("ratataskr_nomad_job_events_today_total",
+	line("argus_nomad_job_events_today_total",
 		"Number of Nomad job state-change events recorded today", "gauge",
 		nil, float64(s.NomadEventsToday))
 
 	// ── Profiles ──────────────────────────────────────────────────────────
-	fmt.Fprintf(w, "# HELP ratataskr_cloud_init_profile_vms Number of VMs using each cloud-init profile\n")
-	fmt.Fprintf(w, "# TYPE ratataskr_cloud_init_profile_vms gauge\n")
+	fmt.Fprintf(w, "# HELP argus_cloud_init_profile_vms Number of VMs using each cloud-init profile\n")
+	fmt.Fprintf(w, "# TYPE argus_cloud_init_profile_vms gauge\n")
 	for _, p := range s.TopCIProfiles {
-		fmt.Fprintf(w, "ratataskr_cloud_init_profile_vms{profile=%q} %d %d\n", p.Name, p.Count, ts)
+		fmt.Fprintf(w, "argus_cloud_init_profile_vms{profile=%q} %d %d\n", p.Name, p.Count, ts)
 	}
 
-	fmt.Fprintf(w, "# HELP ratataskr_salt_profile_applies Number of salt applies using each salt profile\n")
-	fmt.Fprintf(w, "# TYPE ratataskr_salt_profile_applies gauge\n")
+	fmt.Fprintf(w, "# HELP argus_salt_profile_applies Number of salt applies using each salt profile\n")
+	fmt.Fprintf(w, "# TYPE argus_salt_profile_applies gauge\n")
 	for _, p := range s.TopSaltProfiles {
-		fmt.Fprintf(w, "ratataskr_salt_profile_applies{profile=%q} %d %d\n", p.Name, p.Count, ts)
+		fmt.Fprintf(w, "argus_salt_profile_applies{profile=%q} %d %d\n", p.Name, p.Count, ts)
 	}
 
 	// ── Scrape timestamp ──────────────────────────────────────────────────
-	line("ratataskr_last_scrape_timestamp_seconds",
+	line("argus_last_scrape_timestamp_seconds",
 		"Unix timestamp of the last metrics scrape", "gauge",
 		nil, float64(s.ComputedAt.Unix()))
 }
 
 // generateScrapeConfig builds a prometheus.yml scrape_configs snippet for all
-// services that ratataskr knows about.
+// services that argus knows about.
 func generateScrapeConfig(cfg *config.Config) string {
 	var sb strings.Builder
 
-	sb.WriteString("# Prometheus scrape configuration generated by ratataskr\n")
+	sb.WriteString("# Prometheus scrape configuration generated by argus\n")
 	sb.WriteString("# Add these entries under scrape_configs: in your prometheus.yml\n")
 	sb.WriteString("#\n")
 	sb.WriteString("# Generated: " + time.Now().Format(time.RFC3339) + "\n\n")
 
 	sb.WriteString("scrape_configs:\n\n")
 
-	// ── Ratataskr metrics server ─────────────────────────────────────────────
+	// ── Argus metrics server ─────────────────────────────────────────────
 	listen := cfg.Prometheus.Listen
 	if listen == "" {
 		listen = ":9099"
@@ -178,8 +178,8 @@ func generateScrapeConfig(cfg *config.Config) string {
 	if strings.HasPrefix(listen, ":") {
 		host = "localhost" + listen
 	}
-	sb.WriteString("  # Ratataskr homelab metrics (provisioned VMs, salt apply stats, nomad job history)\n")
-	sb.WriteString("  - job_name: ratataskr\n")
+	sb.WriteString("  # Argus homelab metrics (provisioned VMs, salt apply stats, nomad job history)\n")
+	sb.WriteString("  - job_name: argus\n")
 	sb.WriteString("    static_configs:\n")
 	sb.WriteString("      - targets: [" + host + "]\n\n")
 

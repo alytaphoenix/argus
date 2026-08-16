@@ -10,9 +10,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/api"
-	"github.com/alytaphoenix/ratataskr/config"
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/config"
+	"github.com/alytaphoenix/argus/db"
 )
 
 type screenID int
@@ -105,7 +105,8 @@ func NewApp(client *api.Client, saltClient *api.SaltClient, nomadClient *api.Nom
 	csClient *api.CrowdSecClient, wazuhClient *api.WazuhClient,
 	trueNASClient *api.TrueNASClient, plexClient *api.PlexClient, haClient *api.HAClient,
 	hermesClient *api.HermesClient,
-	sshUser, sshPassword string, defaults config.DefaultsConfig, cfg config.Config, database *db.DB) App {
+	sshUser, sshPassword string, defaults config.DefaultsConfig, cfg config.Config, database *db.DB,
+	guidedSetup bool) App {
 	a := App{
 		client:         client,
 		saltClient:     saltClient,
@@ -136,6 +137,18 @@ func NewApp(client *api.Client, saltClient *api.SaltClient, nomadClient *api.Nom
 		claudeOverlay: NewClaudeOverlay(claudeClient),
 	}
 	a.loadAppSettings()
+
+	if guidedSetup {
+		// Drop straight into the Bootstrap tab after first-run Proxmox setup so
+		// the rest of the homelab (Salt, DNS, certs, TrueNAS, Plex, ...) gets
+		// walked through instead of leaving it to manual discovery.
+		a.screen = screenOrchestrate
+		a.orch = NewOrchestrateModel(a.saltClient, a.database, a.cfg.Salt, a.trueNASClient, a.hermesClient, a.cfg,
+			a.dnsClient, a.caClient, a.plexClient)
+		a.orch.tab = orchTabBootstrap
+		a.orch.notice = "Welcome to argus — let's finish setting up your homelab. Checking service status..."
+	}
+
 	return a
 }
 
@@ -147,7 +160,11 @@ func (a *App) loadAppSettings() {
 }
 
 func (a App) Init() tea.Cmd {
-	return tea.Batch(a.nodes.Init(), a.checkMediaStatusCmd(), a.schedulerTickCmd())
+	cmds := []tea.Cmd{a.nodes.Init(), a.checkMediaStatusCmd(), a.schedulerTickCmd()}
+	if a.screen == screenOrchestrate {
+		cmds = append(cmds, a.orch.Init(), a.orch.checkAllServicesCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 // schedulerTickCmd re-arms the once-a-minute scheduler tick.
@@ -920,7 +937,7 @@ func (a App) currentContext() string {
 	case screenRunbooks:
 		return fmt.Sprintf("Runbooks: %d defined", len(a.runbooks.runbooks))
 	default:
-		return "ratataskr homelab dashboard"
+		return "argus homelab dashboard"
 	}
 }
 

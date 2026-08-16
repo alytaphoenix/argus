@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/alytaphoenix/ratataskr/api"
+	"github.com/alytaphoenix/argus/api"
 )
 
 func TestServiceSlug(t *testing.T) {

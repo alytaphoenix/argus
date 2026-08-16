@@ -12,7 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alytaphoenix/ratataskr/api"
+	"github.com/alytaphoenix/argus/api"
 )
 
 type detailTab int
@@ -434,7 +434,7 @@ func (m DetailModel) View() string {
 	var sb strings.Builder
 	g := m.guest
 
-	breadcrumb := styleTitle.Render("⚡ ratataskr") +
+	breadcrumb := styleTitle.Render("⚡ argus") +
 		styleDim.Render(" › ") +
 		styleBold.Render(g.Node) +
 		styleDim.Render(" › ") +

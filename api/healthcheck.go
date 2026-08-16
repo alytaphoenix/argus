@@ -133,7 +133,7 @@ func checkHTTP(ctx context.Context, sc ServiceCheck, addr string, useTLS bool) H
 		res.Error = err.Error()
 		return res
 	}
-	req.Header.Set("User-Agent", "ratataskr-healthcheck/1.0")
+	req.Header.Set("User-Agent", "argus-healthcheck/1.0")
 
 	t0 := time.Now()
 	resp, err := client.Do(req)

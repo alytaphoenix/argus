@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alytaphoenix/ratataskr/config"
+	"github.com/alytaphoenix/argus/config"
 )
 
 // PrometheusClient queries a Prometheus HTTP API.

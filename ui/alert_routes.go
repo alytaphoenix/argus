@@ -13,7 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/alytaphoenix/ratataskr/db"
+	"github.com/alytaphoenix/argus/db"
 )
 
 // AlertRoutesModel manages routing rules that forward security events to webhooks.
@@ -200,9 +200,9 @@ func (m AlertRoutesModel) testWebhookCmd(r db.AlertRoute) tea.Cmd {
 	webhookURL := r.WebhookURL
 	return func() tea.Msg {
 		payload, _ := json.Marshal(map[string]string{
-			"source":   "ratataskr",
+			"source":   "argus",
 			"severity": "test",
-			"message":  "Test alert from ratataskr alert routing",
+			"message":  "Test alert from argus alert routing",
 			"route":    r.Name,
 		})
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
