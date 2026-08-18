@@ -24,11 +24,15 @@ type AlertRoutesModel struct {
 	editing bool
 	editID  int64
 
-	nameInput    textinput.Model
-	sourceInput  textinput.Model
+	nameInput     textinput.Model
+	sourceInput   textinput.Model
 	severityInput textinput.Model
-	webhookInput textinput.Model
-	editFocus    int
+	webhookInput  textinput.Model
+	editFocus     int
+
+	confirmDelete     bool
+	confirmDeleteID   int64
+	confirmDeleteName string
 
 	notice string
 	err    error
@@ -82,6 +86,29 @@ func (m AlertRoutesModel) Update(msg tea.Msg) (AlertRoutesModel, tea.Cmd) {
 func (m AlertRoutesModel) handleKey(msg tea.KeyMsg) (AlertRoutesModel, tea.Cmd) {
 	key := msg.String()
 
+	if m.confirmDelete {
+		switch key {
+		case "y", "Y", "enter":
+			id := m.confirmDeleteID
+			name := m.confirmDeleteName
+			m.confirmDelete = false
+			if m.db != nil {
+				if err := m.db.DeleteAlertRoute(id); err != nil {
+					m.notice = "delete error: " + err.Error()
+				} else {
+					m.notice = "deleted " + name
+					m.reload()
+					if m.cursor >= len(m.routes) && m.cursor > 0 {
+						m.cursor--
+					}
+				}
+			}
+		default:
+			m.confirmDelete = false
+		}
+		return m, nil
+	}
+
 	if m.editing {
 		return m.handleEdit(key, msg)
 	}
@@ -122,11 +149,10 @@ func (m AlertRoutesModel) handleKey(msg tea.KeyMsg) (AlertRoutesModel, tea.Cmd) 
 		}
 	case "d":
 		if m.cursor < len(m.routes) && m.db != nil {
-			_ = m.db.DeleteAlertRoute(m.routes[m.cursor].ID)
-			m.reload()
-			if m.cursor >= len(m.routes) && m.cursor > 0 {
-				m.cursor--
-			}
+			r := m.routes[m.cursor]
+			m.confirmDelete = true
+			m.confirmDeleteID = r.ID
+			m.confirmDeleteName = r.Name
 		}
 	case "t":
 		if m.cursor < len(m.routes) {
@@ -279,7 +305,9 @@ func (m AlertRoutesModel) View() string {
 		sb.WriteString(m.viewList())
 	}
 
-	if m.notice != "" {
+	if m.confirmDelete {
+		sb.WriteString("\n" + styleError.Render(fmt.Sprintf("  Delete alert route %q? [Y/n]", m.confirmDeleteName)))
+	} else if m.notice != "" {
 		sb.WriteString("\n" + styleDim.Render("  "+m.notice))
 	}
 	sb.WriteString("\n" + styleDim.Render(m.helpStr()))

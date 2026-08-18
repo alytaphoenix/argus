@@ -21,10 +21,10 @@ import (
 type resizeConfirmKind int
 
 const (
-	confirmResizeNone resizeConfirmKind = iota
-	confirmResizeApply                  // apply recommended CPU+mem
-	confirmResizeDisk                   // apply disk resize from form
-	confirmResizeCustom                 // apply custom CPU+mem from form
+	confirmResizeNone   resizeConfirmKind = iota
+	confirmResizeApply                    // apply recommended CPU+mem
+	confirmResizeDisk                     // apply disk resize from form
+	confirmResizeCustom                   // apply custom CPU+mem from form
 )
 
 type ResizeModel struct {
@@ -52,9 +52,9 @@ type ResizeModel struct {
 	confirmVM   *api.VMSizingAnalysis
 
 	// Custom resize form
-	editMode    bool
-	editFields  [2]textinput.Model // 0=cores, 1=memMB
-	editFocus   int
+	editMode   bool
+	editFields [2]textinput.Model // 0=cores, 1=memMB
+	editFocus  int
 
 	// Disk resize form
 	diskMode   bool
@@ -579,7 +579,7 @@ func (m ResizeModel) View() string {
 
 	// Notice
 	if m.notice != "" {
-		b.WriteString(styleDim.Render("  " + m.notice) + "\n")
+		b.WriteString(styleDim.Render("  "+m.notice) + "\n")
 	}
 
 	// Help
@@ -601,7 +601,7 @@ func (m ResizeModel) renderTable() string {
 	hdr := fmt.Sprintf("  %-6s %-22s %-5s  %-18s %-18s %-12s  %s\n",
 		"VMID", "Name", "Type", "CPU curr→rec", "RAM curr→rec", "Status", "Savings")
 	b.WriteString(styleDim.Render(hdr))
-	b.WriteString(styleDim.Render("  " + strings.Repeat("─", min(m.width-4, 100))) + "\n")
+	b.WriteString(styleDim.Render("  "+strings.Repeat("─", min(m.width-4, 100))) + "\n")
 
 	for i, a := range m.analyses {
 		cpuCol := formatCPUCol(a)
@@ -626,7 +626,7 @@ func (m ResizeModel) renderTable() string {
 
 func (m ResizeModel) renderDetail(a *api.VMSizingAnalysis) string {
 	var b strings.Builder
-	b.WriteString(styleDim.Render("  ─── " + a.Guest.Name + " ") +
+	b.WriteString(styleDim.Render("  ─── "+a.Guest.Name+" ") +
 		styleDim.Render(strings.Repeat("─", max(m.width-10-len(a.Guest.Name), 10))) + "\n")
 
 	// Sparklines
@@ -768,7 +768,7 @@ func (m ResizeModel) renderConfirm() string {
 		b.WriteString(stylePaused.Render("  │  ⚠ You must resize the filesystem inside the VM separately\n"))
 	}
 	b.WriteString(styleError.Render("  └──────────────────────────────────────────────\n"))
-	b.WriteString(styleBold.Render("  Apply? [y/N] "))
+	b.WriteString(styleBold.Render("  Apply? [Y/n] "))
 	return b.String()
 }
 

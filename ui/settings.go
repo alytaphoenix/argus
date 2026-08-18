@@ -27,6 +27,7 @@ type SettingsModel struct {
 	input    textinput.Model
 
 	notice string
+	err    error
 }
 
 func NewSettingsModel(database *db.DB) SettingsModel {
@@ -71,8 +72,9 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case settingsLoadedMsg:
 		if msg.err != nil {
-			m.notice = "load error: " + msg.err.Error()
+			m.err = msg.err
 		} else {
+			m.err = nil
 			m.settings = msg.settings
 			if m.cursor >= len(m.settings) && len(m.settings) > 0 {
 				m.cursor = len(m.settings) - 1
@@ -84,10 +86,15 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		m.editing = false
 		m.input.SetValue("")
 		if msg.err != nil {
-			m.notice = "save error: " + msg.err.Error()
-		} else {
-			m.notice = fmt.Sprintf("saved %s", msg.key)
+			// Nothing changed on disk, so skip the reload — it would otherwise
+			// immediately overwrite this error via settingsLoadedMsg's success
+			// branch (m.err = nil) before the user ever sees it.
+			m.err = msg.err
+			m.notice = ""
+			return m, nil
 		}
+		m.err = nil
+		m.notice = fmt.Sprintf("saved %s", msg.key)
 		return m, m.loadSettings()
 
 	case tea.KeyMsg:
@@ -138,6 +145,8 @@ func (m SettingsModel) handleKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
 		return m, m.loadSettings()
 	case "b", "esc":
 		return m, func() tea.Msg { return backMsg{} }
+	case "q":
+		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -156,7 +165,9 @@ func (m SettingsModel) View() string {
 		b.WriteString(m.viewList())
 	}
 
-	if m.notice != "" {
+	if m.err != nil {
+		b.WriteString("\n" + styleError.Render("  "+m.err.Error()))
+	} else if m.notice != "" {
 		b.WriteString("\n" + styleDim.Render("  "+m.notice))
 	}
 	b.WriteString("\n" + styleDim.Render(m.helpStr()))
@@ -209,5 +220,5 @@ func (m SettingsModel) helpStr() string {
 	if m.editing {
 		return "  enter save · esc cancel"
 	}
-	return "  ↑/↓ navigate · enter/e edit · R reload · b back"
+	return "  ↑/↓ navigate · enter/e edit · R reload · b back · q quit"
 }

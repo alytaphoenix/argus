@@ -75,7 +75,7 @@ var svcTabLabels = []string{"Services", "DNS", "Certificates", "TrueNAS", "Home 
 type svcDialogState int
 
 const (
-	svcDialogNone              svcDialogState = iota
+	svcDialogNone svcDialogState = iota
 	svcDialogProvisionOrRegister
 	svcDialogRegisterType
 	svcDialogDiscovery
@@ -111,13 +111,13 @@ type ServicesModel struct {
 	tab           servicesTab
 
 	// Services tab
-	services    []db.Service
-	latestHC    map[int64]db.HealthCheck
-	uptimePct   map[int64]float64
-	svcCursor   int
-	addingSvc   bool
-	svcFields   [svcFieldCount]textinput.Model
-	svcFocus    int
+	services  []db.Service
+	latestHC  map[int64]db.HealthCheck
+	uptimePct map[int64]float64
+	svcCursor int
+	addingSvc bool
+	svcFields [svcFieldCount]textinput.Model
+	svcFocus  int
 
 	// Template picker
 	pickingTemplate bool
@@ -135,6 +135,11 @@ type ServicesModel struct {
 	dnsFocus   int
 	dnsZone    string
 	dnsLoading bool
+
+	// DNS record delete confirmation
+	dnsConfirmDelete bool
+	dnsPendingRecord api.DNSRecord
+	dnsPendingZone   string
 
 	// Certs tab
 	certs      []db.Certificate
@@ -156,9 +161,9 @@ type ServicesModel struct {
 	haEntities []api.HAEntity
 	haLoading  bool
 	haChecked  bool
-	haCursor  int
-	haVersion string
-	haErr     string
+	haCursor   int
+	haVersion  string
+	haErr      string
 
 	// Host provision / register dialog
 	serviceHosts map[string]db.ServiceHost
@@ -324,6 +329,9 @@ func (m ServicesModel) handleKey(msg tea.KeyMsg) (ServicesModel, tea.Cmd) {
 	if m.addingDNS {
 		return m.handleDNSForm(key, msg)
 	}
+	if m.dnsConfirmDelete {
+		return m.handleDNSTab(key)
+	}
 
 	// Tab switching with lazy-loading
 	switch key {
@@ -343,6 +351,8 @@ func (m ServicesModel) handleKey(msg tea.KeyMsg) (ServicesModel, tea.Cmd) {
 		return m, nil
 	case "b", "esc":
 		return m, func() tea.Msg { return backMsg{} }
+	case "q":
+		return m, tea.Quit
 	}
 
 	// Per-tab navigation — add a case here when you add a new tab file
@@ -436,17 +446,23 @@ func (m ServicesModel) renderTabBar() string {
 
 func (m ServicesModel) helpString() string {
 	// Add a case here when you add a new tab file
+	var s string
 	switch m.tab {
 	case svcTabServices:
-		return m.svcHelpString()
+		s = m.svcHelpString()
 	case svcTabDNS:
-		return m.dnsHelpString()
+		s = m.dnsHelpString()
 	case svcTabCerts:
-		return m.certsHelpString()
+		s = m.certsHelpString()
 	case svcTabTrueNAS:
-		return m.trueNASHelpString()
+		s = m.trueNASHelpString()
 	case svcTabHomeAssistant:
-		return m.haHelpString()
+		s = m.haHelpString()
 	}
-	return ""
+	// Only advertise q=quit at the top level — modals/forms may need "q" as
+	// literal input, and their help strings already describe tab/enter/esc.
+	if s != "" && m.dialog == svcDialogNone && !m.pickingTemplate && !m.addingSvc && !m.addingDNS {
+		s += " · q quit"
+	}
+	return s
 }

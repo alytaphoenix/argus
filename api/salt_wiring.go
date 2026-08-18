@@ -4,15 +4,17 @@ package api
 // (Services screen → w). Deploy target: /srv/salt/services/wiring.sls.
 //
 // Required master pillar keys (add to your pillar):
-//   technitium_url    http://dns.local:5380
-//   technitium_token  <api-token>
-//   traefik_dir       /etc/traefik/dynamic   (default)
-//   stepca_url        https://ca.local:9000  (only needed for cert: true services)
+//
+//	technitium_url    http://dns.local:5380
+//	technitium_token  <api-token>
+//	traefik_dir       /etc/traefik/dynamic   (default)
+//	stepca_url        https://ca.local:9000  (only needed for cert: true services)
 //
 // Add to /srv/pillar/top.sls:
-//   base:
-//     '<master_minion>':
-//       - argus_services
+//
+//	base:
+//	  '<master_minion>':
+//	    - argus_services
 //
 // Apply: salt '<master_minion>' state.apply services.wiring
 const WiringStateTemplate = `# services.wiring — managed by argus
@@ -101,12 +103,13 @@ const WiringStateTemplate = `# services.wiring — managed by argus
 // populates via the Orchestrate → Pillar screen (t = sync TrueNAS, p = push).
 //
 // Required pillar structure (in /srv/pillar/argus_cluster.sls):
-//   storage:
-//     tank_media:
-//       nfs_host: 192.168.1.10
-//       nfs_export: /mnt/tank/media
-//       mount_path: /mnt/tank/media
-//       nfs_options: ro,noatime      # optional, defaults shown
+//
+//	storage:
+//	  tank_media:
+//	    nfs_host: 192.168.1.10
+//	    nfs_export: /mnt/tank/media
+//	    mount_path: /mnt/tank/media
+//	    nfs_options: ro,noatime      # optional, defaults shown
 //
 // Apply: salt '<minion>' state.apply storage.nas_mounts
 const NASMountTemplate = `# storage.nas_mounts — managed by argus

@@ -24,12 +24,16 @@ type SaltModel struct {
 	width   int
 	height  int
 	spinner spinner.Model
+
+	confirmApply bool              // true when awaiting y/n confirmation to apply highstate
+	actingTarget string            // minion ID the in-flight dispatch/poll targets
+	polling      map[string]string // JID → minion ID, for in-flight result polls
 }
 
 func NewSaltModel(client *api.SaltClient) SaltModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	return SaltModel{client: client, loading: true, spinner: s}
+	return SaltModel{client: client, loading: true, spinner: s, polling: make(map[string]string)}
 }
 
 func (m SaltModel) Init() tea.Cmd {
@@ -50,10 +54,13 @@ func (m SaltModel) fetch() tea.Cmd {
 }
 
 func (m SaltModel) doApplyHighstate() tea.Cmd {
-	if m.cursor >= len(m.minions) {
+	// Use the target captured when the confirmation was armed, not the
+	// current cursor — a concurrent minion-list refresh while the y/n
+	// confirm is pending must not retarget or lose the dispatch.
+	target := m.actingTarget
+	if target == "" {
 		return nil
 	}
-	target := m.minions[m.cursor].ID
 	client := m.client
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -62,7 +69,42 @@ func (m SaltModel) doApplyHighstate() tea.Cmd {
 		if err != nil {
 			return saltActionDoneMsg{err: err}
 		}
-		return saltActionDoneMsg{notice: "highstate dispatched — JID " + jid}
+		return saltActionDoneMsg{notice: "highstate dispatched — JID " + jid, jid: jid}
+	}
+}
+
+// pollJobResult waits saltPollInterval then checks whether the Salt job has
+// returned a result. On each tick it returns either saltPollTickMsg (retry)
+// or saltPollResultMsg (done / gave up). Mirrors SaltDetailModel.pollJobResult
+// (ui/salt_detail.go), minus the local DB event bookkeeping this list-level
+// screen doesn't have.
+func (m SaltModel) pollJobResult(jid string, attempt int) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		time.Sleep(saltPollInterval)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		done, success, failedStates, err := client.JobResult(ctx, jid)
+		if err != nil || !done {
+			if attempt+1 >= saltPollMaxTries {
+				return saltPollResultMsg{jid: jid, done: true, success: false, errMsg: "timed out"}
+			}
+			return saltPollTickMsg{jid: jid, attempt: attempt + 1}
+		}
+
+		errMsg := ""
+		if !success && len(failedStates) > 0 {
+			// Truncate very long state ID lists.
+			if len(failedStates) > 3 {
+				errMsg = strings.Join(failedStates[:3], ", ") +
+					fmt.Sprintf(" (+%d more)", len(failedStates)-3)
+			} else {
+				errMsg = "failed: " + strings.Join(failedStates, ", ")
+			}
+		}
+		return saltPollResultMsg{jid: jid, done: true, success: success, errMsg: errMsg}
 	}
 }
 
@@ -83,6 +125,49 @@ func (m SaltModel) Update(msg tea.Msg) (SaltModel, tea.Cmd) {
 		if msg.err == nil {
 			m.notice = msg.notice
 		}
+		if msg.err == nil && msg.jid != "" {
+			if m.polling == nil {
+				m.polling = make(map[string]string)
+			}
+			m.polling[msg.jid] = m.actingTarget
+			return m, m.pollJobResult(msg.jid, 0)
+		}
+		return m, nil
+
+	case saltPollTickMsg:
+		// Ignore JIDs this screen didn't dispatch — e.g. a poll started here
+		// can be delivered after the user has navigated into the minion
+		// detail screen (and vice versa), since tea.Cmd results route to
+		// whichever screen is active when they land, not the one that
+		// launched them.
+		if _, mine := m.polling[msg.jid]; !mine {
+			return m, nil
+		}
+		// Job not done yet — fire another poll round.
+		return m, m.pollJobResult(msg.jid, msg.attempt)
+
+	case saltPollResultMsg:
+		target, mine := m.polling[msg.jid]
+		if !mine {
+			return m, nil
+		}
+		delete(m.polling, msg.jid)
+		if target == "" {
+			target = "minion"
+		}
+		if msg.done {
+			shortJID := msg.jid[:min8(msg.jid)]
+			if msg.success {
+				m.err = nil
+				m.notice = fmt.Sprintf("highstate on %s: success (JID %s)", target, shortJID)
+			} else {
+				errDetail := msg.errMsg
+				if errDetail == "" {
+					errDetail = "highstate failed"
+				}
+				m.err = fmt.Errorf("highstate on %s: %s (JID %s)", target, errDetail, shortJID)
+			}
+		}
 		return m, nil
 
 	case errMsg:
@@ -96,6 +181,20 @@ func (m SaltModel) Update(msg tea.Msg) (SaltModel, tea.Cmd) {
 		return m, cmd
 
 	case tea.KeyMsg:
+		if m.confirmApply {
+			switch msg.String() {
+			case "y", "Y", "enter":
+				m.confirmApply = false
+				m.acting = true
+				m.notice = ""
+				m.err = nil
+				return m, m.doApplyHighstate()
+			default:
+				m.confirmApply = false
+			}
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
@@ -118,9 +217,9 @@ func (m SaltModel) Update(msg tea.Msg) (SaltModel, tea.Cmd) {
 			}
 		case key.Matches(msg, keys.SaltApply):
 			if len(m.minions) > 0 && m.minions[m.cursor].Online {
-				m.acting = true
+				m.actingTarget = m.minions[m.cursor].ID
+				m.confirmApply = true
 				m.notice = ""
-				return m, m.doApplyHighstate()
 			}
 		case key.Matches(msg, keys.Refresh):
 			m.loading = true
@@ -144,7 +243,10 @@ func (m SaltModel) View() string {
 		return sb.String()
 	}
 
-	if m.err != nil {
+	if m.err != nil && len(m.minions) == 0 {
+		// Only take over the whole screen for load failures — once minions
+		// are loaded, action/poll errors are surfaced inline below so the
+		// list stays visible.
 		sb.WriteString(styleError.Render("  error: "+m.err.Error()) + "\n\n")
 		sb.WriteString(styleHelp.Render("  R to retry  b back"))
 		return sb.String()
@@ -201,11 +303,18 @@ func (m SaltModel) View() string {
 	}
 
 	sb.WriteString("\n")
-	if m.acting {
+	switch {
+	case m.confirmApply && m.cursor < len(m.minions):
+		sb.WriteString(stylePaused.Render(fmt.Sprintf("  Apply highstate to %q? [Y/n]", m.minions[m.cursor].ID)) + "\n")
+	case m.acting:
 		sb.WriteString("  " + m.spinner.View() + " dispatching...\n")
-	} else if m.notice != "" {
+	case len(m.polling) > 0:
+		sb.WriteString("  " + m.spinner.View() + fmt.Sprintf(" polling %d job(s) for result...\n", len(m.polling)))
+	case m.err != nil:
+		sb.WriteString(styleError.Render("  ✗ "+m.err.Error()) + "\n")
+	case m.notice != "":
 		sb.WriteString(styleRunning.Render("  ✓ "+m.notice) + "\n")
-	} else {
+	default:
 		sb.WriteString("\n")
 	}
 

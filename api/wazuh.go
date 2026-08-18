@@ -15,7 +15,6 @@ import (
 	"github.com/alytaphoenix/argus/config"
 )
 
-
 // WazuhClient talks to the Wazuh REST API.
 // Docs: https://documentation.wazuh.com/current/user-manual/api/reference.html
 type WazuhClient struct {
@@ -55,14 +54,14 @@ func NewWazuhClient(cfg config.WazuhConfig) *WazuhClient {
 
 // WazuhAgent is a Wazuh monitoring agent installed on a node.
 type WazuhAgent struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	IP           string    `json:"ip"`
-	Status       string    `json:"status"` // "active", "disconnected", "never_connected"
-	Version      string    `json:"version"`
-	OS           WazuhOS   `json:"os"`
-	LastKeepAlive string   `json:"lastKeepAlive"`
-	RegisteredAt string    `json:"dateAdd"`
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	IP            string  `json:"ip"`
+	Status        string  `json:"status"` // "active", "disconnected", "never_connected"
+	Version       string  `json:"version"`
+	OS            WazuhOS `json:"os"`
+	LastKeepAlive string  `json:"lastKeepAlive"`
+	RegisteredAt  string  `json:"dateAdd"`
 }
 
 // WazuhOS holds OS info for an agent.
@@ -92,11 +91,11 @@ type WazuhRule struct {
 
 // WazuhSummary is high-level stats for the TUI header.
 type WazuhSummary struct {
-	TotalAgents       int
-	ActiveAgents      int
+	TotalAgents        int
+	ActiveAgents       int
 	DisconnectedAgents int
-	AlertsLast24h     int
-	CriticalAlerts    int // level >= 10
+	AlertsLast24h      int
+	CriticalAlerts     int // level >= 10
 }
 
 // ── API methods ───────────────────────────────────────────────────────────────

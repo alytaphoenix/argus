@@ -32,24 +32,27 @@ const (
 // ProfilesModel manages saved cloud-init and salt profiles, VM history,
 // and the salt/nomad event logs.
 type ProfilesModel struct {
-	db       *db.DB
-	tab      profilesTab
-	cursor   int
-	width    int
-	height   int
-	editing  editingProfile
-	editIdx  int // index into current list being edited (-1 = new)
-	inputs   []textinput.Model
-	focused  int
-	err      error
-	notice   string
-	ciProfs     []db.CloudInitProfile
-	saltProfs   []db.SaltProfile
-	history     []db.ProvisionedVM
-	saltEvents  []db.SaltApplyEvent
-	nomadEvents []db.NomadJobEvent
-	ciUsage     map[string]int // profile name → VM count
-	saltUsage   map[string]int // profile name → apply event count
+	db                *db.DB
+	tab               profilesTab
+	cursor            int
+	width             int
+	height            int
+	editing           editingProfile
+	editIdx           int // index into current list being edited (-1 = new)
+	inputs            []textinput.Model
+	focused           int
+	err               error
+	notice            string
+	confirmDelete     bool
+	confirmDeleteTab  profilesTab
+	confirmDeleteName string
+	ciProfs           []db.CloudInitProfile
+	saltProfs         []db.SaltProfile
+	history           []db.ProvisionedVM
+	saltEvents        []db.SaltApplyEvent
+	nomadEvents       []db.NomadJobEvent
+	ciUsage           map[string]int // profile name → VM count
+	saltUsage         map[string]int // profile name → apply event count
 }
 
 func NewProfilesModel(database *db.DB) ProfilesModel {
@@ -155,6 +158,16 @@ func (m ProfilesModel) Update(msg tea.Msg) (ProfilesModel, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.confirmDelete {
+			switch msg.String() {
+			case "y", "Y", "enter":
+				return m.deleteConfirmed()
+			default:
+				m.confirmDelete = false
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -181,7 +194,7 @@ func (m ProfilesModel) Update(msg tea.Msg) (ProfilesModel, tea.Cmd) {
 		case "enter", "e":
 			return m.startEdit()
 		case "d":
-			return m.deleteSelected()
+			return m.armDelete()
 		case "R":
 			m.reload()
 			m.notice = "refreshed"
@@ -299,27 +312,42 @@ func (m ProfilesModel) saveEditing() (ProfilesModel, tea.Cmd) {
 	return m, nil
 }
 
-func (m ProfilesModel) deleteSelected() (ProfilesModel, tea.Cmd) {
-	var err error
+// armDelete captures the currently selected profile's tab and name and asks
+// for confirmation before deleteConfirmed actually removes it. Only the
+// Cloud-init and Salt tabs hold deletable profiles.
+func (m ProfilesModel) armDelete() (ProfilesModel, tea.Cmd) {
 	switch m.tab {
 	case profTabCloudInit:
 		if m.cursor < len(m.ciProfs) {
-			err = m.db.DeleteCloudInitProfile(m.ciProfs[m.cursor].Name)
-			if err == nil {
-				m.notice = "deleted " + m.ciProfs[m.cursor].Name
-			}
+			m.confirmDelete = true
+			m.confirmDeleteTab = m.tab
+			m.confirmDeleteName = m.ciProfs[m.cursor].Name
 		}
 	case profTabSalt:
 		if m.cursor < len(m.saltProfs) {
-			err = m.db.DeleteSaltProfile(m.saltProfs[m.cursor].Name)
-			if err == nil {
-				m.notice = "deleted " + m.saltProfs[m.cursor].Name
-			}
+			m.confirmDelete = true
+			m.confirmDeleteTab = m.tab
+			m.confirmDeleteName = m.saltProfs[m.cursor].Name
 		}
+	}
+	return m, nil
+}
+
+func (m ProfilesModel) deleteConfirmed() (ProfilesModel, tea.Cmd) {
+	m.confirmDelete = false
+	name := m.confirmDeleteName
+	var err error
+	switch m.confirmDeleteTab {
+	case profTabCloudInit:
+		err = m.db.DeleteCloudInitProfile(name)
+	case profTabSalt:
+		err = m.db.DeleteSaltProfile(name)
 	}
 	if err != nil {
 		m.err = err
 	} else {
+		m.err = nil
+		m.notice = "deleted " + name
 		m.reload()
 		if m.cursor > 0 && m.cursor >= m.listLen() {
 			m.cursor = m.listLen() - 1
@@ -367,7 +395,13 @@ func (m ProfilesModel) View() string {
 	}
 
 	sb.WriteString("\n")
-	if m.err != nil {
+	if m.confirmDelete {
+		noun := "cloud-init profile"
+		if m.confirmDeleteTab == profTabSalt {
+			noun = "salt profile"
+		}
+		sb.WriteString(styleError.Render(fmt.Sprintf("  Delete %s %q? [Y/n]", noun, m.confirmDeleteName)) + "\n\n")
+	} else if m.err != nil {
 		sb.WriteString(styleError.Render("  error: "+m.err.Error()) + "\n\n")
 	} else if m.notice != "" {
 		sb.WriteString(styleRunning.Render("  ✓ "+m.notice) + "\n\n")

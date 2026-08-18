@@ -9,26 +9,26 @@ import (
 )
 
 type Config struct {
-	Host       string           `toml:"host"`
-	TokenID    string           `toml:"token_id"`
-	Secret     string           `toml:"secret"`
-	Username   string           `toml:"username"` // ticket auth (e.g. "root@pam"); takes priority over token
-	Password   string           `toml:"password"`
-	Insecure   bool             `toml:"insecure"`
-	Globals    GlobalsConfig    `toml:"globals"`
-	Salt       SaltConfig       `toml:"salt"`
-	Nomad      NomadConfig      `toml:"nomad"`
-	Defaults   DefaultsConfig   `toml:"defaults"`
-	Prometheus PrometheusConfig `toml:"prometheus"`
-	Technitium TechnitiumConfig `toml:"technitium"`
-	StepCA     StepCAConfig     `toml:"stepca"`
-	TrueNAS    TrueNASConfig    `toml:"truenas"`
-	Claude     ClaudeConfig     `toml:"claude"`
-	Matchbox   MatchboxConfig   `toml:"matchbox"`
-	CrowdSec   CrowdSecConfig   `toml:"crowdsec"`
-	Wazuh      WazuhConfig      `toml:"wazuh"`
-	Plex       PlexConfig       `toml:"plex"`
-	Servarr    ServarrConfigs   `toml:"servarr"`
+	Host          string              `toml:"host"`
+	TokenID       string              `toml:"token_id"`
+	Secret        string              `toml:"secret"`
+	Username      string              `toml:"username"` // ticket auth (e.g. "root@pam"); takes priority over token
+	Password      string              `toml:"password"`
+	Insecure      bool                `toml:"insecure"`
+	Globals       GlobalsConfig       `toml:"globals"`
+	Salt          SaltConfig          `toml:"salt"`
+	Nomad         NomadConfig         `toml:"nomad"`
+	Defaults      DefaultsConfig      `toml:"defaults"`
+	Prometheus    PrometheusConfig    `toml:"prometheus"`
+	Technitium    TechnitiumConfig    `toml:"technitium"`
+	StepCA        StepCAConfig        `toml:"stepca"`
+	TrueNAS       TrueNASConfig       `toml:"truenas"`
+	Claude        ClaudeConfig        `toml:"claude"`
+	Matchbox      MatchboxConfig      `toml:"matchbox"`
+	CrowdSec      CrowdSecConfig      `toml:"crowdsec"`
+	Wazuh         WazuhConfig         `toml:"wazuh"`
+	Plex          PlexConfig          `toml:"plex"`
+	Servarr       ServarrConfigs      `toml:"servarr"`
 	Loki          LokiConfig          `toml:"loki"`
 	HomeAssistant HomeAssistantConfig `toml:"homeassistant"`
 	Hermes        HermesConfig        `toml:"hermes"`
@@ -36,23 +36,23 @@ type Config struct {
 
 // PlexConfig configures the Plex Media Server integration.
 type PlexConfig struct {
-	URL      string `toml:"url"`       // e.g. http://192.168.1.50:32400
-	Token    string `toml:"token"`     // X-Plex-Token; get from plex.tv/claim or prefs XML
-	Insecure bool   `toml:"insecure"`  // skip TLS verify for self-signed certs
-	VMID     int    `toml:"vmid"`      // Proxmox VMID if Plex runs in a VM (for status badge)
-	VMNode   string `toml:"vm_node"`   // Proxmox node name for the Plex VM
+	URL      string `toml:"url"`      // e.g. http://192.168.1.50:32400
+	Token    string `toml:"token"`    // X-Plex-Token; get from plex.tv/claim or prefs XML
+	Insecure bool   `toml:"insecure"` // skip TLS verify for self-signed certs
+	VMID     int    `toml:"vmid"`     // Proxmox VMID if Plex runs in a VM (for status badge)
+	VMNode   string `toml:"vm_node"`  // Proxmox node name for the Plex VM
 }
 
 // ServarrConfigs holds per-app settings for the *arr family.
 type ServarrConfigs struct {
-	Sonarr     ServarrAppConfig `toml:"sonarr"`
-	Radarr     ServarrAppConfig `toml:"radarr"`
-	Lidarr     ServarrAppConfig `toml:"lidarr"`
-	Readarr    ServarrAppConfig `toml:"readarr"`
-	Prowlarr   ServarrAppConfig `toml:"prowlarr"`
-	Bazarr     ServarrAppConfig `toml:"bazarr"`
-	Overseerr  ServarrAppConfig `toml:"overseerr"`
-	Tautulli   ServarrAppConfig `toml:"tautulli"`
+	Sonarr    ServarrAppConfig `toml:"sonarr"`
+	Radarr    ServarrAppConfig `toml:"radarr"`
+	Lidarr    ServarrAppConfig `toml:"lidarr"`
+	Readarr   ServarrAppConfig `toml:"readarr"`
+	Prowlarr  ServarrAppConfig `toml:"prowlarr"`
+	Bazarr    ServarrAppConfig `toml:"bazarr"`
+	Overseerr ServarrAppConfig `toml:"overseerr"`
+	Tautulli  ServarrAppConfig `toml:"tautulli"`
 }
 
 // ServarrAppConfig is config for one *arr app instance.
@@ -60,7 +60,7 @@ type ServarrAppConfig struct {
 	URL      string `toml:"url"`
 	APIKey   string `toml:"api_key"`
 	Insecure bool   `toml:"insecure"`
-	VMID     int    `toml:"vmid"`     // Proxmox VMID if the service runs in a VM
+	VMID     int    `toml:"vmid"` // Proxmox VMID if the service runs in a VM
 	VMNode   string `toml:"vm_node"`
 }
 
@@ -170,13 +170,13 @@ type PrometheusConfig struct {
 }
 
 type DefaultsConfig struct {
-	TemplateID   int    `toml:"template_id"`
-	CPUCores     int    `toml:"cpu_cores"`
-	MemoryMB     int    `toml:"memory_mb"`
-	DiskGB       int    `toml:"disk_gb"`
-	Storage      string `toml:"storage"`
-	Bridge       string `toml:"bridge"`
-	OSType       string `toml:"ostype"`
+	TemplateID    int    `toml:"template_id"`
+	CPUCores      int    `toml:"cpu_cores"`
+	MemoryMB      int    `toml:"memory_mb"`
+	DiskGB        int    `toml:"disk_gb"`
+	Storage       string `toml:"storage"`
+	Bridge        string `toml:"bridge"`
+	OSType        string `toml:"ostype"`
 	SSHUser       string `toml:"ssh_user"`
 	CIUser        string `toml:"ci_user"`
 	CISSHKey      string `toml:"ci_ssh_key"`
@@ -200,6 +200,18 @@ type SaltConfig struct {
 	MasterMinion string `toml:"master_minion"` // minion ID of the salt-master host (for file writes)
 	PillarBase   string `toml:"pillar_base"`   // pillar root on master, default /srv/pillar
 	StateBase    string `toml:"state_base"`    // state root on master, default /srv/salt
+}
+
+// envAny returns the first non-empty value among the given env var names,
+// checked in order. Used to prefer the current ARGUS_* name while still
+// honoring the pre-rename RATATASKR_* name for anyone with it already set.
+func envAny(names ...string) string {
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func Load() (*Config, error) {
@@ -254,7 +266,7 @@ func Load() (*Config, error) {
 	if v := os.Getenv("PROMETHEUS_TOKEN"); v != "" {
 		cfg.Prometheus.Token = v
 	}
-	if v := os.Getenv("RATATASKR_METRICS_LISTEN"); v != "" {
+	if v := envAny("ARGUS_METRICS_LISTEN", "RATATASKR_METRICS_LISTEN"); v != "" {
 		cfg.Prometheus.Listen = v
 	}
 	if v := os.Getenv("TECHNITIUM_URL"); v != "" {
@@ -298,16 +310,16 @@ func Load() (*Config, error) {
 	}
 
 	// Globals env overrides
-	if v := os.Getenv("RATATASKR_SSH_USER"); v != "" {
+	if v := envAny("ARGUS_SSH_USER", "RATATASKR_SSH_USER"); v != "" {
 		cfg.Globals.SSHUser = v
 	}
-	if v := os.Getenv("RATATASKR_SSH_KEY"); v != "" {
+	if v := envAny("ARGUS_SSH_KEY", "RATATASKR_SSH_KEY"); v != "" {
 		cfg.Globals.SSHKey = v
 	}
-	if v := os.Getenv("RATATASKR_DOMAIN"); v != "" {
+	if v := envAny("ARGUS_DOMAIN", "RATATASKR_DOMAIN"); v != "" {
 		cfg.Globals.Domain = v
 	}
-	if v := os.Getenv("RATATASKR_TIMEZONE"); v != "" {
+	if v := envAny("ARGUS_TIMEZONE", "RATATASKR_TIMEZONE"); v != "" {
 		cfg.Globals.Timezone = v
 	}
 

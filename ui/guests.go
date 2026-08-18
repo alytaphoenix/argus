@@ -21,6 +21,7 @@ const (
 	confirmNone confirmKind = iota
 	confirmStop
 	confirmReboot
+	confirmDeleteSnapshot
 )
 
 type GuestsModel struct {
@@ -417,15 +418,15 @@ func (m GuestsModel) View() string {
 	selCount := len(m.selected)
 	switch {
 	case m.bulkConfirm == "start":
-		sb.WriteString(stylePaused.Render(fmt.Sprintf("  Start %d selected guests? [y/N]", selCount)) + "\n")
+		sb.WriteString(stylePaused.Render(fmt.Sprintf("  Start %d selected guests? [Y/n]", selCount)) + "\n")
 	case m.bulkConfirm == "stop":
-		sb.WriteString(styleError.Render(fmt.Sprintf("  Stop %d selected guests? [y/N]", selCount)) + "\n")
+		sb.WriteString(styleError.Render(fmt.Sprintf("  Stop %d selected guests? [Y/n]", selCount)) + "\n")
 	case m.bulkConfirm == "reboot":
-		sb.WriteString(stylePaused.Render(fmt.Sprintf("  Reboot %d selected guests? [y/N]", selCount)) + "\n")
+		sb.WriteString(stylePaused.Render(fmt.Sprintf("  Reboot %d selected guests? [Y/n]", selCount)) + "\n")
 	case m.confirm == confirmStop && m.cursor < len(m.guests):
-		sb.WriteString(styleError.Render(fmt.Sprintf("  Stop %q? [y/N]", m.guests[m.cursor].Name)) + "\n")
+		sb.WriteString(styleError.Render(fmt.Sprintf("  Stop %q? [Y/n]", m.guests[m.cursor].Name)) + "\n")
 	case m.confirm == confirmReboot && m.cursor < len(m.guests):
-		sb.WriteString(stylePaused.Render(fmt.Sprintf("  Reboot %q? [y/N]", m.guests[m.cursor].Name)) + "\n")
+		sb.WriteString(stylePaused.Render(fmt.Sprintf("  Reboot %q? [Y/n]", m.guests[m.cursor].Name)) + "\n")
 	case m.fetchingIP:
 		sb.WriteString("  " + m.spinner.View() + " looking up IP...\n")
 	case m.acting:

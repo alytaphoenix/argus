@@ -33,17 +33,18 @@ type cfgSection struct {
 
 // ConfigEditorModel is a Bubbletea model for editing ~/.config/argus/config.toml.
 type ConfigEditorModel struct {
-	cfg      *config.Config
-	sections []cfgSection
-	section  int
-	row      int
-	editing  bool
-	input    textinput.Model
-	dirty    bool
-	saved    bool
-	errMsg   string
-	width    int
-	height   int
+	cfg         *config.Config
+	sections    []cfgSection
+	section     int
+	row         int
+	editing     bool
+	input       textinput.Model
+	dirty       bool
+	saved       bool
+	confirmQuit bool // set after a first q/ctrl+c with unsaved changes; second press quits
+	errMsg      string
+	width       int
+	height      int
 }
 
 func strField(label, hint, placeholder string,
@@ -418,8 +419,16 @@ func (m ConfigEditorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m ConfigEditorModel) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() != "ctrl+c" && msg.String() != "q" {
+		m.confirmQuit = false
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
+		if m.dirty && !m.confirmQuit {
+			m.confirmQuit = true
+			m.errMsg = "unsaved changes — s to save, " + msg.String() + " again to discard and quit"
+			return m, nil
+		}
 		return m, tea.Quit
 
 	case "right", "tab", "l":
@@ -499,7 +508,11 @@ func (m ConfigEditorModel) handleNavKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m ConfigEditorModel) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
+		// Route through the same unsaved-changes guard as nav-mode quit,
+		// instead of discarding edits unconditionally.
+		m.input.Blur()
+		m.editing = false
+		return m.handleNavKey(msg)
 	case "esc":
 		m.input.Blur()
 		m.editing = false
@@ -588,7 +601,7 @@ func (m ConfigEditorModel) View() string {
 			cur := f.get(m.cfg)
 			if cur == "" {
 				if f.placeholder != "" {
-					valStr = styleDim.Render("(empty — default: "+f.placeholder+")")
+					valStr = styleDim.Render("(empty — default: " + f.placeholder + ")")
 				} else {
 					valStr = styleDim.Render("(empty)")
 				}

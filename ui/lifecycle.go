@@ -24,11 +24,15 @@ type LifecycleModel struct {
 	editing  bool
 	editID   int64
 
-	nameInput    textinput.Model
-	tagInput     textinput.Model
-	actionInput  textinput.Model
-	idleInput    textinput.Model
-	editFocus    int
+	nameInput   textinput.Model
+	tagInput    textinput.Model
+	actionInput textinput.Model
+	idleInput   textinput.Model
+	editFocus   int
+
+	confirmDelete     bool
+	confirmDeleteID   int64
+	confirmDeleteName string
 
 	running bool
 	notice  string
@@ -85,6 +89,29 @@ func (m LifecycleModel) Update(msg tea.Msg) (LifecycleModel, tea.Cmd) {
 func (m LifecycleModel) handleKey(msg tea.KeyMsg) (LifecycleModel, tea.Cmd) {
 	key := msg.String()
 
+	if m.confirmDelete {
+		switch key {
+		case "y", "Y", "enter":
+			id := m.confirmDeleteID
+			name := m.confirmDeleteName
+			m.confirmDelete = false
+			if m.db != nil {
+				if err := m.db.DeleteLifecyclePolicy(id); err != nil {
+					m.notice = "delete error: " + err.Error()
+				} else {
+					m.notice = "deleted " + name
+					m.reload()
+					if m.cursor >= len(m.policies) && m.cursor > 0 {
+						m.cursor--
+					}
+				}
+			}
+		default:
+			m.confirmDelete = false
+		}
+		return m, nil
+	}
+
 	if m.editing {
 		return m.handleEdit(key, msg)
 	}
@@ -125,11 +152,10 @@ func (m LifecycleModel) handleKey(msg tea.KeyMsg) (LifecycleModel, tea.Cmd) {
 		}
 	case "d":
 		if m.cursor < len(m.policies) && m.db != nil {
-			_ = m.db.DeleteLifecyclePolicy(m.policies[m.cursor].ID)
-			m.reload()
-			if m.cursor >= len(m.policies) && m.cursor > 0 {
-				m.cursor--
-			}
+			p := m.policies[m.cursor]
+			m.confirmDelete = true
+			m.confirmDeleteID = p.ID
+			m.confirmDeleteName = p.Name
 		}
 	case "r":
 		if m.cursor < len(m.policies) {
@@ -285,7 +311,9 @@ func (m LifecycleModel) View() string {
 		sb.WriteString(m.viewList())
 	}
 
-	if m.notice != "" {
+	if m.confirmDelete {
+		sb.WriteString("\n" + styleError.Render(fmt.Sprintf("  Delete policy %q? [Y/n]", m.confirmDeleteName)))
+	} else if m.notice != "" {
 		sb.WriteString("\n" + styleDim.Render("  "+m.notice))
 	}
 	sb.WriteString("\n" + styleDim.Render(m.helpStr()))

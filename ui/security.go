@@ -53,39 +53,39 @@ type SecurityModel struct {
 	csLoading   bool
 
 	// Wazuh tab
-	wazuhAgents   []api.WazuhAgent
-	wazuhAlerts   []api.WazuhAlert
-	wazuhSummary  api.WazuhSummary
-	wazuhCursor   int
-	wazuhOnline   bool
-	wazuhChecked  bool
-	wazuhLoading  bool
+	wazuhAgents  []api.WazuhAgent
+	wazuhAlerts  []api.WazuhAlert
+	wazuhSummary api.WazuhSummary
+	wazuhCursor  int
+	wazuhOnline  bool
+	wazuhChecked bool
+	wazuhLoading bool
 
 	// History tab
 	history    []db.SecurityEvent
 	histCursor int
 
 	// Scan tab
-	scanGuests      []api.Guest
-	scanFindings    []api.ScanFinding  // current in-memory results
-	scanSavedResult []db.ScanResult    // results from DB
-	scanCursor      int
-	scanRunning     bool
-	scanLoading     bool // loading guests
-	scanMode        int  // 0 = all VMs, 1 = custom IP
-	scanInput       textinput.Model
-	scanEditing     bool
-	scanConfirm     bool // confirm remediation dialog
+	scanGuests         []api.Guest
+	scanFindings       []api.ScanFinding // current in-memory results
+	scanSavedResult    []db.ScanResult   // results from DB
+	scanCursor         int
+	scanRunning        bool
+	scanLoading        bool // loading guests
+	scanMode           int  // 0 = all VMs, 1 = custom IP
+	scanInput          textinput.Model
+	scanEditing        bool
+	scanConfirm        bool // confirm remediation dialog
 	scanConfirmFinding api.ScanFinding
 
 	// CVE tab
-	cveScanner   *api.CVEScanner
-	cveTarget    textinput.Model
-	cveEditing   bool
-	cveFindings  []api.CVEFinding
-	cveRunning   bool
-	cveCursor    int
-	cveErr       error
+	cveScanner  *api.CVEScanner
+	cveTarget   textinput.Model
+	cveEditing  bool
+	cveFindings []api.CVEFinding
+	cveRunning  bool
+	cveCursor   int
+	cveErr      error
 
 	// Cross-system: tracked service hosts (for Wazuh/CrowdSec cross-reference)
 	serviceHosts map[string]db.ServiceHost
@@ -662,6 +662,8 @@ func (m SecurityModel) handleKey(msg tea.KeyMsg) (SecurityModel, tea.Cmd) {
 		return m, nil
 	case "b", "esc":
 		return m, func() tea.Msg { return backMsg{} }
+	case "q":
+		return m, tea.Quit
 	case "R":
 		m.csLoading = true
 		m.wazuhLoading = true
@@ -1246,17 +1248,17 @@ func (m SecurityModel) viewCVE(height int) string {
 func (m SecurityModel) helpStr() string {
 	switch m.tab {
 	case secTabCrowdSec:
-		return "  ↑/↓ navigate · d/u unban · r refresh · R reload all · ←/→ tab · b back"
+		return "  ↑/↓ navigate · d/u unban · r refresh · R reload all · ←/→ tab · b back · q quit"
 	case secTabWazuh:
-		return "  ↑/↓ navigate · r refresh · R reload all · ←/→ tab · b back"
+		return "  ↑/↓ navigate · r refresh · R reload all · ←/→ tab · b back · q quit"
 	case secTabHistory:
-		return "  ↑/↓ navigate · r reload · ←/→ tab · b back"
+		return "  ↑/↓ navigate · r reload · ←/→ tab · b back · q quit"
 	case secTabScan:
-		return "  ↑/↓ navigate · r run scan · i custom target · t toggle mode · enter remediate · x clear · b back"
+		return "  ↑/↓ navigate · r run scan · i custom target · t toggle mode · enter remediate · x clear · b back · q quit"
 	case secTabCVE:
-		return "  s/enter set target · ↑/↓ navigate · ←/→ tab · b back"
+		return "  s/enter set target · ↑/↓ navigate · ←/→ tab · b back · q quit"
 	}
-	return "  ←/→ tab · b back"
+	return "  ←/→ tab · b back · q quit"
 }
 
 // ── Style helpers ─────────────────────────────────────────────────────────────

@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,18 +19,28 @@ import (
 	"github.com/alytaphoenix/argus/ui"
 )
 
+const usage = `argus — Bubble Tea TUI for managing a Proxmox homelab
+
+Usage:
+  argus              Launch the TUI (first-run setup runs automatically if unconfigured)
+  argus config       Launch the interactive config editor
+  argus --help       Show this help
+
+Config file: ~/.config/argus/config.toml (override with the ARGUS_CONFIG env var)
+See config.toml.example in the repo for all available settings.`
+
 func main() {
-	// argus config — launch the interactive config editor.
-	if len(os.Args) > 1 && os.Args[1] == "config" {
-		rawCfg, _ := config.Load() // load without Keychain overlay; errors are non-fatal
-		if rawCfg == nil {
-			rawCfg = &config.Config{}
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-h", "--help", "help":
+			fmt.Println(usage)
+			os.Exit(0)
+		case "config":
+			runConfigEditor()
+		default:
+			fmt.Fprintf(os.Stderr, "argus: unknown command %q\n\n%s\n", os.Args[1], usage)
+			os.Exit(2)
 		}
-		if err := ui.RunConfigEditor(rawCfg); err != nil {
-			fmt.Fprintf(os.Stderr, "config editor error: %v\n", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
 	}
 
 	cfg, err := loadConfig()
@@ -50,7 +62,7 @@ func main() {
 		}
 		if !done {
 			fmt.Fprintln(os.Stderr, "setup aborted")
-			os.Exit(1)
+			os.Exit(0) // deliberate user cancellation, not a program error
 		}
 		if cfg, err = loadConfig(); err != nil {
 			fmt.Fprintf(os.Stderr, "config error: %v\n", err)
@@ -127,8 +139,12 @@ func main() {
 	// Start the embedded metrics server in the background if configured.
 	if cfg.Prometheus.Listen != "" {
 		go func() {
-			if err := startMetricsServer(cfg.Prometheus.Listen, database, cfg); err != nil {
-				log.Printf("metrics server error: %v", err)
+			// Log to a file, not stderr — the TUI owns the terminal's
+			// alt-screen once it launches, and a log line written there
+			// mid-session corrupts the display.
+			logger := embeddedServerLogger()
+			if err := startMetricsServer(cfg.Prometheus.Listen, database, cfg, logger); err != nil {
+				logger.Printf("metrics server error: %v", err)
 			}
 		}()
 	}
@@ -145,6 +161,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runConfigEditor launches the interactive config editor and exits; it never returns.
+func runConfigEditor() {
+	rawCfg, err := config.Load() // load without Keychain overlay; missing file is not an error
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "argus config: %v\n", err)
+		fmt.Fprintln(os.Stderr, "fix the file manually or move it aside, then re-run argus config")
+		os.Exit(1)
+	}
+	if rawCfg == nil {
+		rawCfg = &config.Config{}
+	}
+	if err := ui.RunConfigEditor(rawCfg); err != nil {
+		fmt.Fprintf(os.Stderr, "config editor error: %v\n", err)
+		os.Exit(1)
+	}
+	os.Exit(0)
 }
 
 // loadConfig loads config from file/env and overlays keyring credentials.
@@ -171,9 +205,26 @@ func loadConfig() (*config.Config, error) {
 	return cfg, nil
 }
 
+// embeddedServerLogger returns a logger writing to ~/.config/argus/argus.log,
+// falling back to a discard logger if the file can't be opened — never to
+// stderr, which the TUI owns once it launches.
+func embeddedServerLogger() *log.Logger {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return log.New(io.Discard, "", 0)
+	}
+	dir := filepath.Join(home, ".config", "argus")
+	_ = os.MkdirAll(dir, 0o755)
+	f, err := os.OpenFile(filepath.Join(dir, "argus.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return log.New(io.Discard, "", 0)
+	}
+	return log.New(f, "", log.LstdFlags)
+}
+
 // startMetricsServer runs an embedded Prometheus metrics HTTP server.
 // This is a lighter version of cmd/metrics-server; both share the same DB.
-func startMetricsServer(listen string, database *db.DB, cfg *config.Config) error {
+func startMetricsServer(listen string, database *db.DB, cfg *config.Config, logger *log.Logger) error {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -194,7 +245,7 @@ func startMetricsServer(listen string, database *db.DB, cfg *config.Config) erro
 		writeMetricsText(w, snap)
 	})
 
-	log.Printf("argus metrics listening on %s/metrics", listen)
+	logger.Printf("argus metrics listening on %s/metrics", listen)
 	srv := &http.Server{
 		Addr:         listen,
 		Handler:      mux,

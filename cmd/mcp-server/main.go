@@ -125,7 +125,6 @@ func intArg(args map[string]any, key string) int {
 	return 0
 }
 
-
 // ── Client bundle ────────────────────────────────────────────────────────────
 
 type mcpClients struct {
@@ -1467,6 +1466,9 @@ func main() {
 		var req rpcRequest
 		if err := json.Unmarshal(line, &req); err != nil {
 			log.Printf("parse error: %v", err)
+			if err := enc.Encode(errResp(nil, -32700, "Parse error")); err != nil {
+				log.Printf("encode error: %v", err)
+			}
 			continue
 		}
 

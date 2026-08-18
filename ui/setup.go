@@ -22,15 +22,17 @@ const (
 )
 
 type SetupModel struct {
-	inputs   [setupFieldCount]textinput.Model
-	focus    int
-	insecure bool
-	testing  bool
-	done     bool
-	errMsg   string
-	reason   string
-	width    int
-	height   int
+	inputs      [setupFieldCount]textinput.Model
+	focus       int
+	insecure    bool
+	testing     bool
+	cancelTest  context.CancelFunc
+	confirmQuit bool // set after a first esc with typed input; second esc quits
+	done        bool
+	errMsg      string
+	reason      string
+	width       int
+	height      int
 }
 
 type setupResultMsg struct{ err error }
@@ -75,6 +77,10 @@ func (m SetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case setupResultMsg:
 		m.testing = false
+		if m.cancelTest != nil {
+			m.cancelTest()
+			m.cancelTest = nil
+		}
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
 			return m, nil
@@ -84,13 +90,36 @@ func (m SetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if m.testing {
-			if msg.String() == "ctrl+c" {
+			switch msg.String() {
+			case "ctrl+c":
+				if m.cancelTest != nil {
+					m.cancelTest()
+				}
 				return m, tea.Quit
+			case "esc":
+				if m.cancelTest != nil {
+					m.cancelTest()
+				}
+				m.testing = false
+				m.cancelTest = nil
+				m.errMsg = "connection test cancelled"
 			}
 			return m, nil
 		}
+		if msg.String() != "esc" {
+			m.confirmQuit = false
+		}
 		switch msg.String() {
-		case "ctrl+c", "esc":
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			host := strings.TrimSpace(m.inputs[setupFieldHost].Value())
+			pass := m.inputs[setupFieldPassword].Value()
+			if !m.confirmQuit && (host != "" || pass != "") {
+				m.confirmQuit = true
+				m.errMsg = "press esc again to quit and discard input"
+				return m, nil
+			}
 			return m, tea.Quit
 		case "tab", "down":
 			return m.setFocus((m.focus + 1) % setupFieldCount), nil
@@ -115,7 +144,9 @@ func (m SetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.errMsg = ""
 			m.testing = true
-			return m, setupTestCmd(host, username, password, m.insecure)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			m.cancelTest = cancel
+			return m, setupTestCmd(ctx, host, username, password, m.insecure)
 		}
 	}
 
@@ -131,13 +162,18 @@ func (m SetupModel) setFocus(i int) SetupModel {
 	return m
 }
 
-func setupTestCmd(host, username, password string, insecure bool) tea.Cmd {
+// setupTestCmd tests the Proxmox connection. ctx is owned by the caller
+// (SetupModel.cancelTest), which cancels it either when the user presses esc
+// to abort the test or once a result arrives — so no explicit cancel() call
+// is needed here.
+func setupTestCmd(ctx context.Context, host, username, password string, insecure bool) tea.Cmd {
 	return func() tea.Msg {
 		cfg := &config.Config{Host: host, Username: username, Password: password, Insecure: insecure}
 		client := api.NewClient(cfg)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
 		if _, err := client.Nodes(ctx); err != nil {
+			if ctx.Err() != nil {
+				return nil // cancelled by the user — SetupModel already updated its own state
+			}
 			return setupResultMsg{err: fmt.Errorf("connection failed: %w", err)}
 		}
 		if err := gkr.Save(gkr.KeyProxmoxPassword, password); err != nil {
@@ -179,12 +215,16 @@ func (m SetupModel) View() string {
 
 	switch {
 	case m.testing:
-		b.WriteString("  " + stylePaused.Render("connecting to "+strings.TrimSpace(m.inputs[setupFieldHost].Value())+" ...") + "\n")
+		b.WriteString("  " + stylePaused.Render("connecting to "+strings.TrimSpace(m.inputs[setupFieldHost].Value())+" ... (esc to cancel)") + "\n")
 	case m.errMsg != "":
 		b.WriteString("  " + styleError.Render(m.errMsg) + "\n")
 	}
 
-	b.WriteString("\n" + styleHelp.Render("enter: next/connect · tab: switch field · ctrl+t: toggle TLS verify · esc: quit"))
+	help := "enter: next/connect · tab: switch field · ctrl+t: toggle TLS verify · esc: quit"
+	if m.testing {
+		help = "esc: cancel test · ctrl+c: quit"
+	}
+	b.WriteString("\n" + styleHelp.Render(help))
 	return b.String()
 }
 

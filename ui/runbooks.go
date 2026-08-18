@@ -33,6 +33,15 @@ const (
 	rbTabEdit
 )
 
+// rbConfirmKind identifies which confirmation dialog is currently showing.
+type rbConfirmKind int
+
+const (
+	rbConfirmNone rbConfirmKind = iota
+	rbConfirmRun
+	rbConfirmDelete
+)
+
 // RunbooksModel manages runbook definitions and execution history.
 type RunbooksModel struct {
 	db         *db.DB
@@ -44,6 +53,13 @@ type RunbooksModel struct {
 	cursor    int
 	runCursor int
 
+	// Detail view — shows a runbook's steps without executing them.
+	viewingDetail bool
+
+	// Confirmation dialog (run / delete) — mirrors the confirmKind pattern
+	// used in ui/guests.go.
+	confirm rbConfirmKind
+
 	// Edit state
 	editing   bool
 	editID    int64
@@ -52,13 +68,13 @@ type RunbooksModel struct {
 	stepsRaw  textinput.Model // JSON steps (simplified editor)
 	editFocus int
 
-	running  bool
-	runID    int64
-	notice   string
-	err      error
-	spinner  spinner.Model
-	width    int
-	height   int
+	running bool
+	runID   int64
+	notice  string
+	err     error
+	spinner spinner.Model
+	width   int
+	height  int
 }
 
 func NewRunbooksModel(database *db.DB, saltClient *api.SaltClient) RunbooksModel {
@@ -105,9 +121,11 @@ func (m RunbooksModel) Update(msg tea.Msg) (RunbooksModel, tea.Cmd) {
 	case runbookRunDoneMsg:
 		m.running = false
 		if msg.err != nil {
-			m.notice = "run failed: " + msg.err.Error()
+			m.err = fmt.Errorf("run failed: %w", msg.err)
+			m.notice = ""
 		} else {
 			m.notice = fmt.Sprintf("run #%d completed", msg.runID)
+			m.err = nil
 		}
 		m.reload()
 		return m, nil
@@ -128,6 +146,62 @@ func (m RunbooksModel) handleKey(msg tea.KeyMsg) (RunbooksModel, tea.Cmd) {
 
 	if m.editing {
 		return m.handleEdit(key, msg)
+	}
+
+	// Confirmation dialog (run / delete) takes priority over everything else.
+	if m.confirm != rbConfirmNone {
+		switch key {
+		case "y", "Y", "enter":
+			action := m.confirm
+			m.confirm = rbConfirmNone
+			if m.cursor >= len(m.runbooks) {
+				return m, nil
+			}
+			rb := m.runbooks[m.cursor]
+			switch action {
+			case rbConfirmRun:
+				m.running = true
+				m.viewingDetail = false
+				m.tab = rbTabRuns
+				m.err = nil
+				m.notice = ""
+				return m, m.executeRunbookCmd(rb)
+			case rbConfirmDelete:
+				if m.db != nil {
+					if err := m.db.DeleteRunbook(rb.ID); err != nil {
+						m.err = fmt.Errorf("delete error: %w", err)
+					} else {
+						m.err = nil
+						m.notice = "deleted " + rb.Name
+						m.viewingDetail = false
+					}
+				}
+				m.reload()
+				if m.cursor >= len(m.runbooks) && m.cursor > 0 {
+					m.cursor--
+				}
+			}
+		default:
+			// Any other key cancels — consistent with every other confirm
+			// dialog in the app.
+			m.confirm = rbConfirmNone
+		}
+		return m, nil
+	}
+
+	// Detail view — read-only display of a runbook's steps.
+	if m.viewingDetail {
+		switch key {
+		case "b", "esc":
+			m.viewingDetail = false
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		case "r":
+			if m.cursor < len(m.runbooks) {
+				m.confirm = rbConfirmRun
+			}
+		}
+		return m, nil
 	}
 
 	switch key {
@@ -163,6 +237,7 @@ func (m RunbooksModel) handleKey(msg tea.KeyMsg) (RunbooksModel, tea.Cmd) {
 		m.stepsRaw.SetValue("")
 		m.editFocus = 0
 		m.nameInput.Focus()
+		m.err = nil
 	case "e":
 		if m.tab == rbTabList && m.cursor < len(m.runbooks) {
 			rb := m.runbooks[m.cursor]
@@ -173,21 +248,19 @@ func (m RunbooksModel) handleKey(msg tea.KeyMsg) (RunbooksModel, tea.Cmd) {
 			m.stepsRaw.SetValue(rb.StepsJSON)
 			m.editFocus = 0
 			m.nameInput.Focus()
+			m.err = nil
 		}
 	case "d":
-		if m.tab == rbTabList && m.cursor < len(m.runbooks) && m.db != nil {
-			_ = m.db.DeleteRunbook(m.runbooks[m.cursor].ID)
-			m.reload()
-			if m.cursor >= len(m.runbooks) && m.cursor > 0 {
-				m.cursor--
-			}
-		}
-	case "enter", "r":
 		if m.tab == rbTabList && m.cursor < len(m.runbooks) {
-			rb := m.runbooks[m.cursor]
-			m.running = true
-			m.tab = rbTabRuns
-			return m, m.executeRunbookCmd(rb)
+			m.confirm = rbConfirmDelete
+		}
+	case "r":
+		if m.tab == rbTabList && m.cursor < len(m.runbooks) {
+			m.confirm = rbConfirmRun
+		}
+	case "enter":
+		if m.tab == rbTabList && m.cursor < len(m.runbooks) {
+			m.viewingDetail = true
 		}
 		if m.tab == rbTabRuns && m.runCursor < len(m.runs) && m.db != nil {
 			rb := m.runs[m.runCursor]
@@ -227,19 +300,20 @@ func (m RunbooksModel) handleEdit(key string, msg tea.KeyMsg) (RunbooksModel, te
 			StepsJSON:   stepsJSON,
 		}
 		if rb.Name == "" {
-			m.notice = "name is required"
+			m.err = fmt.Errorf("name is required")
 			return m, nil
 		}
 		if m.db != nil {
 			_, err := m.db.SaveRunbook(rb)
 			if err != nil {
-				m.notice = "save error: " + err.Error()
+				m.err = fmt.Errorf("save error: %w", err)
 				return m, nil
 			}
 		}
 		m.editing = false
 		inputs[m.editFocus].Blur()
 		m.reload()
+		m.err = nil
 		m.notice = "saved"
 	default:
 		var cmd tea.Cmd
@@ -349,9 +423,12 @@ func (m RunbooksModel) View() string {
 	}
 	sb.WriteString("\n" + styleDim.Render(strings.Repeat("─", max(m.width-4, 40))) + "\n\n")
 
-	if m.editing {
+	switch {
+	case m.editing:
 		sb.WriteString(m.viewEdit())
-	} else {
+	case m.viewingDetail:
+		sb.WriteString(m.viewDetail())
+	default:
 		switch m.tab {
 		case rbTabList:
 			sb.WriteString(m.viewList())
@@ -360,10 +437,57 @@ func (m RunbooksModel) View() string {
 		}
 	}
 
-	if m.notice != "" {
+	if m.confirm != rbConfirmNone && m.cursor < len(m.runbooks) {
+		rb := m.runbooks[m.cursor]
+		switch m.confirm {
+		case rbConfirmRun:
+			steps := parseRunbookSteps(rb.StepsJSON)
+			sb.WriteString("\n" + styleError.Render(fmt.Sprintf("  Run %q (%d step(s))? [Y/n]", rb.Name, len(steps))))
+		case rbConfirmDelete:
+			sb.WriteString("\n" + styleError.Render(fmt.Sprintf("  Delete %q? [Y/n]", rb.Name)))
+		}
+	} else if m.err != nil {
+		sb.WriteString("\n" + styleError.Render("  ✗ "+m.err.Error()))
+	} else if m.notice != "" {
 		sb.WriteString("\n" + styleDim.Render("  "+m.notice))
 	}
 	sb.WriteString("\n" + styleDim.Render(m.helpStr()))
+	return sb.String()
+}
+
+// parseRunbookSteps parses a runbook's raw steps JSON, returning an empty
+// slice (rather than an error) on malformed input — used only for display.
+func parseRunbookSteps(stepsJSON string) []RunbookStep {
+	var steps []RunbookStep
+	_ = json.Unmarshal([]byte(stepsJSON), &steps)
+	return steps
+}
+
+// viewDetail renders a runbook's steps without executing them — reached via
+// enter on the runbook list. This is the non-mutating counterpart to r (run).
+func (m RunbooksModel) viewDetail() string {
+	var sb strings.Builder
+	if m.cursor >= len(m.runbooks) {
+		sb.WriteString(styleDim.Render("  No runbook selected.\n"))
+		return sb.String()
+	}
+	rb := m.runbooks[m.cursor]
+	sb.WriteString(styleBold.Render("  "+rb.Name) + "\n")
+	if rb.Description != "" {
+		sb.WriteString(styleDim.Render("  "+rb.Description) + "\n")
+	}
+	sb.WriteString("\n")
+
+	steps := parseRunbookSteps(rb.StepsJSON)
+	if len(steps) == 0 {
+		sb.WriteString(styleDim.Render("  (no steps, or steps JSON is invalid)\n"))
+		return sb.String()
+	}
+	sb.WriteString(styleSubtle.Render(fmt.Sprintf("  %-4s %-6s %-20s %-20s %s\n", "#", "Kind", "Name", "Target", "Command")))
+	sb.WriteString(styleDim.Render("  "+strings.Repeat("─", max(m.width-4, 60))) + "\n")
+	for i, s := range steps {
+		sb.WriteString(fmt.Sprintf("  %-4d %-6s %-20s %-20s %s\n", i+1, s.Kind, truncate(s.Name, 20), truncate(s.Target, 20), s.Command))
+	}
 	return sb.String()
 }
 
@@ -374,7 +498,7 @@ func (m RunbooksModel) viewList() string {
 		return sb.String()
 	}
 	sb.WriteString(styleSubtle.Render(fmt.Sprintf("  %-4s %-30s %s\n", "#", "Name", "Description")))
-	sb.WriteString(styleDim.Render("  " + strings.Repeat("─", max(m.width-4, 60))) + "\n")
+	sb.WriteString(styleDim.Render("  "+strings.Repeat("─", max(m.width-4, 60))) + "\n")
 	for i, rb := range m.runbooks {
 		line := fmt.Sprintf("  %-4d %-30s %s", rb.ID, truncate(rb.Name, 30), truncate(rb.Description, 50))
 		if i == m.cursor {
@@ -395,7 +519,7 @@ func (m RunbooksModel) viewRuns() string {
 	rb := m.runbooks[m.cursor]
 	runs, _ := m.db.RecentRunbookRuns(rb.ID, 20)
 	if len(runs) == 0 {
-		sb.WriteString(styleDim.Render("  No runs for " + rb.Name + " yet. Press enter or r to run.\n"))
+		sb.WriteString(styleDim.Render("  No runs for " + rb.Name + " yet. Go to the Runbooks tab and press r to run.\n"))
 		return sb.String()
 	}
 	sb.WriteString(styleBold.Render("  Runs for: "+rb.Name) + "\n\n")
@@ -414,7 +538,7 @@ func (m RunbooksModel) viewRuns() string {
 			sb.WriteString(styleSelected.Render(line) + "\n")
 			if r.Output != "" {
 				for _, ol := range strings.Split(r.Output, "\n") {
-					sb.WriteString(styleDim.Render("       " + truncate(ol, m.width-10)) + "\n")
+					sb.WriteString(styleDim.Render("       "+truncate(ol, m.width-10)) + "\n")
 				}
 			}
 		} else {
@@ -456,5 +580,11 @@ func (m RunbooksModel) helpStr() string {
 	if m.editing {
 		return "  tab advance · enter save · esc cancel"
 	}
-	return "  ↑/↓ navigate · n new · e edit · d delete · enter/r run · ←/→ tab · b back"
+	if m.confirm != rbConfirmNone {
+		return "  y/enter confirm · n/esc cancel"
+	}
+	if m.viewingDetail {
+		return "  r run · b/esc back"
+	}
+	return "  ↑/↓ navigate · enter view · n new · e edit · d delete · r run · ←/→ tab · b back"
 }

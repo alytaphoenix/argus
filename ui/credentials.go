@@ -43,14 +43,14 @@ const (
 )
 
 type CredentialsModel struct {
-	cursor   int
-	section  credSection
-	editing  bool
-	input    textinput.Model
-	notice   string
-	err      error
-	width    int
-	height   int
+	cursor    int
+	section   credSection
+	editing   bool
+	input     textinput.Model
+	notice    string
+	err       error
+	width     int
+	height    int
 	database  *db.DB
 	globals   config.GlobalsConfig
 	nodeCreds []db.NodeSSHCred
@@ -58,6 +58,12 @@ type CredentialsModel struct {
 	nodeEditMode string // "node" | "user" | "pass" | ""
 	nodeEditNode string
 	nodeEditUser string
+
+	// delete confirmation state
+	confirmDelete       bool
+	confirmDeleteGlobal bool // true = credRow delete, false = node SSH cred delete
+	confirmDeleteRow    credRow
+	confirmDeleteNode   db.NodeSSHCred
 }
 
 func NewCredentialsModel(database *db.DB, globals config.GlobalsConfig) CredentialsModel {
@@ -73,6 +79,46 @@ func (m CredentialsModel) Init() tea.Cmd { return nil }
 func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.confirmDelete {
+			switch msg.String() {
+			case "y", "Y", "enter":
+				m.confirmDelete = false
+				if m.confirmDeleteGlobal {
+					row := m.confirmDeleteRow
+					if err := gkr.Delete(row.key); err != nil {
+						m.err = err
+					} else {
+						m.err = nil
+						m.notice = "deleted " + row.displayName
+					}
+				} else {
+					nc := m.confirmDeleteNode
+					var delErr error
+					if err := gkr.Delete(nc.KeyringKey); err != nil {
+						delErr = err
+					}
+					if m.database != nil {
+						if err := m.database.DeleteNodeSSHCred(nc.Node); err != nil && delErr == nil {
+							delErr = err
+						}
+						m.nodeCreds, _ = m.database.NodeSSHCreds()
+					}
+					if delErr != nil {
+						m.err = delErr
+					} else {
+						m.err = nil
+						m.notice = "deleted SSH credentials for " + nc.Node
+					}
+					if m.cursor >= len(m.nodeCreds) && m.cursor > 0 {
+						m.cursor--
+					}
+				}
+			default:
+				m.confirmDelete = false
+			}
+			return m, nil
+		}
+
 		if m.editing {
 			switch msg.String() {
 			case "enter":
@@ -80,8 +126,16 @@ func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 				if m.section == credSectionGlobal {
 					row := credRows[m.cursor]
 					if val == "" {
-						gkr.Delete(row.key) //nolint:errcheck
-						m.notice = "deleted " + row.displayName
+						// Blank submits as a delete request — route through
+						// the same confirm dialog as the "d" key so an
+						// accidental blank submit can't erase a secret.
+						if gkr.IsSet(row.key) {
+							m.confirmDelete = true
+							m.confirmDeleteGlobal = true
+							m.confirmDeleteRow = row
+						} else {
+							m.notice = "nothing to delete"
+						}
 					} else {
 						if err := gkr.Save(row.key, val); err != nil {
 							m.err = err
@@ -111,12 +165,15 @@ func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 						}
 						keyringKey := gkr.SSHNodeKey(node)
 						if pass == "" {
-							// Delete
-							gkr.Delete(keyringKey) //nolint:errcheck
-							if m.database != nil {
-								m.database.DeleteNodeSSHCred(node) //nolint:errcheck
+							// Blank submits as a delete request — same confirm
+							// gate as the "d" key.
+							if gkr.IsSet(keyringKey) {
+								m.confirmDelete = true
+								m.confirmDeleteGlobal = false
+								m.confirmDeleteNode = db.NodeSSHCred{Node: node, SSHUser: user, KeyringKey: keyringKey}
+							} else {
+								m.notice = "nothing to delete"
 							}
-							m.notice = "deleted SSH credentials for " + node
 						} else {
 							if err := gkr.Save(keyringKey, pass); err != nil {
 								m.err = err
@@ -224,24 +281,20 @@ func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 				return m, textinput.Blink
 			}
 		case "d":
+			m.notice, m.err = "", nil
 			if m.section == credSectionGlobal {
 				row := credRows[m.cursor]
-				if err := gkr.Delete(row.key); err == nil {
-					m.notice = "deleted " + row.displayName
-				} else {
+				if !gkr.IsSet(row.key) {
 					m.notice = "not in keychain"
+				} else {
+					m.confirmDelete = true
+					m.confirmDeleteGlobal = true
+					m.confirmDeleteRow = row
 				}
 			} else if m.cursor < len(m.nodeCreds) {
-				nc := m.nodeCreds[m.cursor]
-				gkr.Delete(nc.KeyringKey) //nolint:errcheck
-				if m.database != nil {
-					m.database.DeleteNodeSSHCred(nc.Node) //nolint:errcheck
-					m.nodeCreds, _ = m.database.NodeSSHCreds()
-				}
-				m.notice = "deleted SSH credentials for " + nc.Node
-				if m.cursor >= len(m.nodeCreds) && m.cursor > 0 {
-					m.cursor--
-				}
+				m.confirmDelete = true
+				m.confirmDeleteGlobal = false
+				m.confirmDeleteNode = m.nodeCreds[m.cursor]
 			}
 		}
 	}
@@ -326,6 +379,15 @@ func (m CredentialsModel) View() string {
 		}
 		sb.WriteString(prompt)
 		sb.WriteString(styleHelp.Render("  enter save  esc cancel") + "\n")
+	} else if m.confirmDelete {
+		var label string
+		if m.confirmDeleteGlobal {
+			label = fmt.Sprintf("Delete %q from Keychain? [Y/n]", m.confirmDeleteRow.displayName)
+		} else {
+			label = fmt.Sprintf("Delete SSH credentials for %q? [Y/n]", m.confirmDeleteNode.Node)
+		}
+		sb.WriteString(styleError.Render("  "+label) + "\n\n")
+		sb.WriteString(styleHelp.Render("  Y confirm  n cancel") + "\n")
 	} else {
 		if m.err != nil {
 			sb.WriteString(styleError.Render("  error: "+m.err.Error()) + "\n\n")

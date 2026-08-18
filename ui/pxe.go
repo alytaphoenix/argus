@@ -21,7 +21,7 @@ import (
 type pxeTab int
 
 const (
-	pxeTabProfiles  pxeTab = iota
+	pxeTabProfiles pxeTab = iota
 	pxeTabGroups
 	pxeTabBootLog
 	pxeTabTemplates
@@ -62,13 +62,13 @@ const (
 
 // Spawn wizard steps
 const (
-	spawnStepType      = 0 // choose: standalone | ha
-	spawnStepProfile   = 1 // select PXE profile
-	spawnStepHostInfo  = 2 // hostname + MAC form
-	spawnStepNetwork   = 3 // IP config form
-	spawnStepCluster   = 4 // HA cluster join IP (HA only)
-	spawnStepConfirm   = 5 // review + confirm
-	spawnStepLaunched  = 6 // waiting for node to boot
+	spawnStepType     = 0 // choose: standalone | ha
+	spawnStepProfile  = 1 // select PXE profile
+	spawnStepHostInfo = 2 // hostname + MAC form
+	spawnStepNetwork  = 3 // IP config form
+	spawnStepCluster  = 4 // HA cluster join IP (HA only)
+	spawnStepConfirm  = 5 // review + confirm
+	spawnStepLaunched = 6 // waiting for node to boot
 )
 
 // ── Model ─────────────────────────────────────────────────────────────────────
@@ -90,11 +90,11 @@ type PXEModel struct {
 	profFocus  int
 
 	// Groups tab
-	groups     []db.PXEGroup
-	grpCursor  int
-	addingGrp  bool
-	grpFields  [pxeGrpFieldCount]textinput.Model
-	grpFocus   int
+	groups    []db.PXEGroup
+	grpCursor int
+	addingGrp bool
+	grpFields [pxeGrpFieldCount]textinput.Model
+	grpFocus  int
 
 	// Boot log tab
 	bootLog    []db.PXEBootEvent
@@ -108,16 +108,16 @@ type PXEModel struct {
 	matchboxChecked bool
 
 	// Spawn wizard
-	spawnStep        int
-	spawnNodeType    string // "standalone" | "ha"
-	spawnProfileIdx  int
-	spawnFields      [spawnFieldCount]textinput.Model
-	spawnFocus       int
+	spawnStep         int
+	spawnNodeType     string // "standalone" | "ha"
+	spawnProfileIdx   int
+	spawnFields       [spawnFieldCount]textinput.Model
+	spawnFocus        int
 	spawnClusterNodes []api.ClusterNode
-	spawnChecking    bool
-	spawning         bool
-	spawnGroupID     string
-	spawnErr         string
+	spawnChecking     bool
+	spawning          bool
+	spawnGroupID      string
+	spawnErr          string
 
 	spinner spinner.Model
 	loading bool
@@ -515,7 +515,8 @@ func (m PXEModel) capturesTab() bool {
 	return m.tab == pxeTabSpawn &&
 		(m.spawnStep == spawnStepHostInfo ||
 			m.spawnStep == spawnStepNetwork ||
-			(m.spawnStep == spawnStepCluster && m.spawnNodeType == "ha"))
+			(m.spawnStep == spawnStepCluster && m.spawnNodeType == "ha") ||
+			m.spawnStep == spawnStepConfirm)
 }
 
 func (m PXEModel) handleKey(msg tea.KeyMsg) (PXEModel, tea.Cmd) {
@@ -528,21 +529,33 @@ func (m PXEModel) handleKey(msg tea.KeyMsg) (PXEModel, tea.Cmd) {
 		return m.handleGrpForm(key, msg)
 	}
 
-	switch key {
-	case "left", "h":
-		if m.tab > 0 {
-			m.tab--
-			m.notice = ""
+	// "q" quits at the top level, but must never fire while a text field is
+	// focused (spawn wizard host/network/cluster steps) — "q" is valid input
+	// there (e.g. hostnames). capturesTab() already tracks that gating.
+	if key == "q" && !m.capturesTab() {
+		return m, tea.Quit
+	}
+
+	// Tab/back navigation must not steal keys the wizard needs for text
+	// input or its own step navigation (e.g. a MAC address containing 'b',
+	// or esc stepping back within the spawn wizard).
+	if !m.capturesTab() {
+		switch key {
+		case "left", "h":
+			if m.tab > 0 {
+				m.tab--
+				m.notice = ""
+			}
+			return m, nil
+		case "right", "l":
+			if m.tab < pxeTabCount-1 {
+				m.tab++
+				m.notice = ""
+			}
+			return m, nil
+		case "b", "esc":
+			return m, func() tea.Msg { return backMsg{} }
 		}
-		return m, nil
-	case "right", "l":
-		if m.tab < pxeTabCount-1 {
-			m.tab++
-			m.notice = ""
-		}
-		return m, nil
-	case "b", "esc":
-		return m, func() tea.Msg { return backMsg{} }
 	}
 
 	switch m.tab {
@@ -980,7 +993,7 @@ func (m PXEModel) viewProfiles(height int) string {
 	}
 	hdr := fmt.Sprintf("  %-24s %-32s %-10s  %s\n", "ID", "Name", "Template", "Kernel URL")
 	b.WriteString(styleDim.Render(hdr))
-	b.WriteString(styleDim.Render("  " + strings.Repeat("─", min(m.width-4, 100))) + "\n")
+	b.WriteString(styleDim.Render("  "+strings.Repeat("─", min(m.width-4, 100))) + "\n")
 	for i, p := range m.profiles {
 		if i >= height-2 {
 			break
@@ -1022,7 +1035,7 @@ func (m PXEModel) viewGroups(height int) string {
 	}
 	hdr := fmt.Sprintf("  %-20s %-30s %-24s  %s\n", "ID", "Name", "Profile", "MAC")
 	b.WriteString(styleDim.Render(hdr))
-	b.WriteString(styleDim.Render("  " + strings.Repeat("─", min(m.width-4, 100))) + "\n")
+	b.WriteString(styleDim.Render("  "+strings.Repeat("─", min(m.width-4, 100))) + "\n")
 	for i, g := range m.groups {
 		if i >= height-2 {
 			break
@@ -1067,7 +1080,7 @@ func (m PXEModel) viewBootLog(height int) string {
 	}
 	hdr := fmt.Sprintf("  %-18s %-20s %-16s %-24s  %s\n", "When", "MAC", "IP", "Profile", "Hostname")
 	b.WriteString(styleDim.Render(hdr))
-	b.WriteString(styleDim.Render("  " + strings.Repeat("─", min(m.width-4, 100))) + "\n")
+	b.WriteString(styleDim.Render("  "+strings.Repeat("─", min(m.width-4, 100))) + "\n")
 	for i, ev := range m.bootLog {
 		if i >= height-2 {
 			break
@@ -1090,7 +1103,7 @@ func (m PXEModel) viewTemplates(height int) string {
 	b.WriteString(styleDim.Render("  Built-in boot image templates — press enter/c to clone into Profiles\n\n"))
 	hdr := fmt.Sprintf("  %-22s %-40s  %s\n", "Template", "Name", "Description")
 	b.WriteString(styleSubtle.Render(hdr))
-	b.WriteString(styleDim.Render("  " + strings.Repeat("─", min(m.width-4, 100))) + "\n")
+	b.WriteString(styleDim.Render("  "+strings.Repeat("─", min(m.width-4, 100))) + "\n")
 	for i, t := range api.PXETemplates {
 		if i >= height-3 {
 			break
@@ -1309,32 +1322,32 @@ func (m PXEModel) helpStr() string {
 		if m.addingProf {
 			return "  tab/enter advance · esc cancel"
 		}
-		return "  ↑/↓ navigate · a add · d delete · S sync to Matchbox · R reload · ←/→ tab · b back"
+		return "  ↑/↓ navigate · a add · d delete · S sync to Matchbox · R reload · ←/→ tab · b back · q quit"
 	case pxeTabGroups:
 		if m.addingGrp {
 			return "  tab/enter advance · esc cancel"
 		}
-		return "  ↑/↓ navigate · a add · d delete · R reload · ←/→ tab · b back"
+		return "  ↑/↓ navigate · a add · d delete · R reload · ←/→ tab · b back · q quit"
 	case pxeTabBootLog:
-		return "  ↑/↓ navigate · R reload · ←/→ tab · b back"
+		return "  ↑/↓ navigate · R reload · ←/→ tab · b back · q quit"
 	case pxeTabTemplates:
-		return "  ↑/↓ navigate · enter/c clone to profiles · ←/→ tab · b back"
+		return "  ↑/↓ navigate · enter/c clone to profiles · ←/→ tab · b back · q quit"
 	case pxeTabSpawn:
 		switch m.spawnStep {
 		case spawnStepType:
-			return "  ←/→/space toggle type · enter next · ←/→ (outer) switch tab · b back"
+			return "  ←/→/space toggle type · enter next · ←/→ (outer) switch tab · b back · q quit"
 		case spawnStepProfile:
-			return "  ↑/↓ select profile · enter next · esc back"
+			return "  ↑/↓ select profile · enter next · esc back · q quit"
 		case spawnStepHostInfo, spawnStepNetwork, spawnStepCluster:
 			return "  tab/enter advance field · esc cancel wizard"
 		case spawnStepConfirm:
-			return "  enter/y spawn · esc go back"
+			return "  enter/y spawn · esc go back · q quit"
 		case spawnStepLaunched:
-			return "  R reload boot log · esc reset wizard · b back"
+			return "  R reload boot log · esc reset wizard · b back · q quit"
 		}
-		return "  ←/→ tab · b back"
+		return "  ←/→ tab · b back · q quit"
 	}
-	return "  ←/→ tab · b back"
+	return "  ←/→ tab · b back · q quit"
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

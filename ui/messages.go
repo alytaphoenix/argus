@@ -130,7 +130,7 @@ type svcProvisionCheckMsg struct {
 	host               string
 	alreadyRegistered  bool
 	existingHost       *db.ServiceHost
-	alreadyProvisioned bool   // found in provisioned_vms by IP
+	alreadyProvisioned bool // found in provisioned_vms by IP
 	provisionedVMID    int
 	provisionedNode    string
 }
@@ -341,7 +341,7 @@ type bulkActionDoneMsg struct {
 
 // Claude overlay messages
 type claudeOverlayMsg struct{}
-type claudeQueryMsg  struct{ question string }
+type claudeQueryMsg struct{ question string }
 type claudeResponseMsg struct {
 	answer string
 	err    error
@@ -361,7 +361,7 @@ type configValidatedMsg struct {
 }
 
 // Runbook messages
-type openRunbooksMsg   struct{}
+type openRunbooksMsg struct{}
 type runbookRunDoneMsg struct {
 	runID int64
 	err   error
@@ -375,7 +375,7 @@ type alertFiredMsg struct {
 }
 
 // Lifecycle messages
-type openLifecycleMsg    struct{}
+type openLifecycleMsg struct{}
 type lifecycleRunDoneMsg struct {
 	applied int
 	err     error
@@ -469,4 +469,14 @@ type orchSvcProvisionDoneMsg struct {
 type orchReloadClientMsg struct {
 	id         string        // bootstrap service ID that was provisioned
 	updatedCfg config.Config // cfg with new URL patched in (keychain fields preserved)
+}
+
+// orchClusterDiscoverDoneMsg carries the result of a live Proxmox cluster
+// inventory scan, used to cross-reference bootstrap services against
+// pre-existing VMs/LXCs before ever suggesting a Salt provision action.
+type orchClusterDiscoverDoneMsg struct {
+	guests           []discoveredGuest
+	unreachableNodes int   // per-node Guests() calls that failed — inventory may be incomplete
+	dbErr            error // ProvisionedVMs() lookup failure — managed/unmanaged split may be inaccurate
+	err              error // fatal: Nodes() itself failed
 }

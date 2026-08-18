@@ -273,10 +273,20 @@ func (m SaltDetailModel) Update(msg tea.Msg) (SaltDetailModel, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case saltPollTickMsg:
+		if _, mine := m.polling[msg.jid]; !mine {
+			// Not our JID — likely a poll started on the Salt list screen,
+			// or for a different minion's detail view. app.go forwards poll
+			// messages to every Salt model since the user may have
+			// navigated away from whichever screen started the poll.
+			return m, nil
+		}
 		// Job not done yet — fire another poll round.
 		return m, m.pollJobResult(msg.jid, msg.eventID, msg.attempt)
 
 	case saltPollResultMsg:
+		if _, mine := m.polling[msg.jid]; !mine {
+			return m, nil
+		}
 		delete(m.polling, msg.jid)
 		// Refresh the event list so the updated result shows up.
 		if m.database != nil {

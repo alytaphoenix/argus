@@ -51,10 +51,10 @@ type MaintenanceModel struct {
 	database      *db.DB
 
 	// Nodes (loaded from Proxmox)
-	nodes       []api.Node
+	nodes        []api.Node
 	clusterNodes []api.ClusterNode // HA cluster membership
 	nodesLoading bool
-	haAware     bool // whether cluster has HA (len(clusterNodes)>1)
+	haAware      bool // whether cluster has HA (len(clusterNodes)>1)
 
 	// Runs tab
 	runs      []db.MaintenanceRun
@@ -63,9 +63,14 @@ type MaintenanceModel struct {
 	activeRun *db.MaintenanceRun // currently executing run
 
 	// Schedules tab
-	schedules    []db.MaintenanceSchedule
-	schedCursor  int
-	deletingSchd bool
+	schedules   []db.MaintenanceSchedule
+	schedCursor int
+
+	// Confirm dialog — shared by any destructive/high-blast-radius action in
+	// this screen (schedule delete, run-now). confirmCmd is executed on
+	// confirm (y/enter) and discarded on cancel (n/esc).
+	confirmText string
+	confirmCmd  tea.Cmd
 
 	// Configure wizard
 	wizardStep  int
@@ -78,11 +83,11 @@ type MaintenanceModel struct {
 	wizFocus    int
 
 	// Live run execution state
-	running      bool
-	runID        int64
-	currentStep  int
-	stepStatus   map[int64]string // stepID → status
-	runNotice    string
+	running     bool
+	runID       int64
+	currentStep int
+	stepStatus  map[int64]string // stepID → status
+	runNotice   string
 
 	spinner spinner.Model
 	loading bool
@@ -610,6 +615,11 @@ func (m MaintenanceModel) Update(msg tea.Msg) (MaintenanceModel, tea.Cmd) {
 func (m MaintenanceModel) handleKey(msg tea.KeyMsg) (MaintenanceModel, tea.Cmd) {
 	key := msg.String()
 
+	// A pending confirm dialog takes over all keyboard input until resolved.
+	if m.confirmText != "" {
+		return m.handleConfirmKey(key)
+	}
+
 	// Wizard inputs
 	if m.tab == maintTabConfigure {
 		return m.handleConfigureTab(key, msg)
@@ -641,6 +651,23 @@ func (m MaintenanceModel) handleKey(msg tea.KeyMsg) (MaintenanceModel, tea.Cmd) 
 		return m.handleSchedulesTab(key)
 	}
 	return m, nil
+}
+
+// handleConfirmKey resolves a pending confirm dialog. Enter and 'y' confirm
+// (matching the "[Y/n]" label shown in the dialog); any other key cancels —
+// consistent with every other confirm dialog in the app.
+func (m MaintenanceModel) handleConfirmKey(key string) (MaintenanceModel, tea.Cmd) {
+	switch key {
+	case "y", "Y", "enter":
+		cmd := m.confirmCmd
+		m.confirmText = ""
+		m.confirmCmd = nil
+		return m, cmd
+	default:
+		m.confirmText = ""
+		m.confirmCmd = nil
+		return m, nil
+	}
 }
 
 func (m MaintenanceModel) handleRunsTab(key string) (MaintenanceModel, tea.Cmd) {
@@ -683,13 +710,17 @@ func (m MaintenanceModel) handleSchedulesTab(key string) (MaintenanceModel, tea.
 	case "d":
 		if m.schedCursor < len(m.schedules) {
 			s := m.schedules[m.schedCursor]
-			return m, m.deleteScheduleCmd(s.ID)
+			m.confirmText = fmt.Sprintf("Delete schedule %q? [Y/n]", s.Name)
+			m.confirmCmd = m.deleteScheduleCmd(s.ID)
 		}
 	case "r":
-		// Run selected schedule now
+		// Run selected schedule now — this can migrate VMs and reboot
+		// nodes, so it requires explicit confirmation before firing.
 		if m.schedCursor < len(m.schedules) {
 			s := m.schedules[m.schedCursor]
-			return m, m.runScheduleNowCmd(s)
+			m.confirmText = fmt.Sprintf("Run maintenance now for %q? %s [Y/n]",
+				s.Name, describeScheduleImpact(s))
+			m.confirmCmd = m.runScheduleNowCmd(s)
 		}
 	}
 	return m, nil
@@ -800,7 +831,24 @@ func (m MaintenanceModel) handleConfigureTab(key string, msg tea.KeyMsg) (Mainte
 		case "enter", "y":
 			runNow := strings.TrimSpace(m.schedRunAt.Value()) == "now" ||
 				strings.TrimSpace(m.schedRunAt.Value()) == ""
-			return m, m.saveScheduleCmd(runNow)
+			if !runNow {
+				return m, m.saveScheduleCmd(false)
+			}
+			// Running now can migrate VMs and reboot nodes — require the
+			// same explicit confirmation as the Schedules-tab "r" action.
+			nodeOrderJSON, _ := json.Marshal(m.nodeOrder)
+			taskFlagsJSON, _ := json.Marshal(m.taskFlags)
+			name := strings.TrimSpace(m.schedName.Value())
+			if name == "" {
+				name = "Cluster Maintenance"
+			}
+			impact := describeScheduleImpact(db.MaintenanceSchedule{
+				NodeOrder: string(nodeOrderJSON),
+				TaskFlags: string(taskFlagsJSON),
+				HAAware:   m.haAware,
+			})
+			m.confirmText = fmt.Sprintf("Run maintenance now for %q? %s [Y/n]", name, impact)
+			m.confirmCmd = m.saveScheduleCmd(true)
 		case "s":
 			// Save schedule only (don't run now)
 			return m, m.saveScheduleCmd(false)
@@ -814,10 +862,14 @@ func (m MaintenanceModel) handleConfigureTab(key string, msg tea.KeyMsg) (Mainte
 func (m MaintenanceModel) deleteScheduleCmd(id int64) tea.Cmd {
 	database := m.database
 	return func() tea.Msg {
-		if database != nil {
-			_ = database.DeleteMaintenanceSchedule(id)
+		if database == nil {
+			return maintSchedulesLoadedMsg{}
 		}
-		return maintSchedulesLoadedMsg{}
+		if err := database.DeleteMaintenanceSchedule(id); err != nil {
+			return maintSchedulesLoadedMsg{err: err}
+		}
+		schedules, err := database.MaintenanceSchedules()
+		return maintSchedulesLoadedMsg{schedules: schedules, err: err}
 	}
 }
 
@@ -867,6 +919,9 @@ func (m MaintenanceModel) View() string {
 	if m.runNotice != "" {
 		b.WriteString(lipgloss.NewStyle().Foreground(colorGreen).Render("  "+m.runNotice) + "\n")
 	}
+	if m.confirmText != "" {
+		b.WriteString(styleError.Render("  ⚠ "+m.confirmText) + "\n")
+	}
 	b.WriteString("\n")
 
 	b.WriteString(m.renderTabBar() + "\n\n")
@@ -915,7 +970,7 @@ func (m MaintenanceModel) viewRuns(height int) string {
 
 	hdr := fmt.Sprintf("  %-4s %-28s %-10s %-20s  %s\n", "#", "Name", "Status", "Started", "Nodes")
 	b.WriteString(styleSubtle.Render(hdr))
-	b.WriteString(styleDim.Render("  " + strings.Repeat("─", min(m.width-4, 90))) + "\n")
+	b.WriteString(styleDim.Render("  "+strings.Repeat("─", min(m.width-4, 90))) + "\n")
 
 	for i, r := range m.runs {
 		if i >= height-2 {
@@ -988,7 +1043,7 @@ func (m MaintenanceModel) viewSchedules(height int) string {
 
 	hdr := fmt.Sprintf("  %-4s %-28s %-10s %-18s  %s\n", "#", "Name", "Repeat", "Next Run", "Nodes")
 	b.WriteString(styleSubtle.Render(hdr))
-	b.WriteString(styleDim.Render("  " + strings.Repeat("─", min(m.width-4, 90))) + "\n")
+	b.WriteString(styleDim.Render("  "+strings.Repeat("─", min(m.width-4, 90))) + "\n")
 
 	for i, s := range m.schedules {
 		if i >= height-2 {
@@ -1139,10 +1194,18 @@ func (m MaintenanceModel) viewConfigure(height int) string {
 		}
 		totalSteps := len(m.nodeOrder) * func() int {
 			n := 0
-			if m.haAware { n += 2 }
-			if m.taskFlags.OSUpdates || m.taskFlags.PkgUpdates { n++ }
-			if m.taskFlags.ProxmoxUpgrade { n++ }
-			if m.taskFlags.Reboot { n++ }
+			if m.haAware {
+				n += 2
+			}
+			if m.taskFlags.OSUpdates || m.taskFlags.PkgUpdates {
+				n++
+			}
+			if m.taskFlags.ProxmoxUpgrade {
+				n++
+			}
+			if m.taskFlags.Reboot {
+				n++
+			}
 			return n
 		}()
 		b.WriteString(fmt.Sprintf("\n  Total: %d steps across %d node(s)\n", totalSteps, len(m.nodeOrder)))
@@ -1194,6 +1257,9 @@ func (m MaintenanceModel) viewConfigure(height int) string {
 }
 
 func (m MaintenanceModel) helpStr() string {
+	if m.confirmText != "" {
+		return "  y/enter confirm · n/esc cancel"
+	}
 	switch m.tab {
 	case maintTabRuns:
 		return "  ↑/↓ navigate · enter view steps · n new run · R reload · ←/→ tab · b back"
@@ -1217,6 +1283,50 @@ func (m MaintenanceModel) helpStr() string {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// describeScheduleImpact renders a short human-readable summary of what
+// running a schedule will actually do, for use in the run-now confirm
+// dialog — the exact task flags and node order encoded on the schedule,
+// not a generic assumption.
+func describeScheduleImpact(s db.MaintenanceSchedule) string {
+	var tf db.MaintenanceTaskFlags
+	_ = json.Unmarshal([]byte(s.TaskFlags), &tf)
+	var nodeOrder []string
+	_ = json.Unmarshal([]byte(s.NodeOrder), &nodeOrder)
+
+	var tasks []string
+	if tf.OSUpdates {
+		tasks = append(tasks, "OS updates")
+	}
+	if tf.PkgUpdates {
+		tasks = append(tasks, "pkg updates")
+	}
+	if tf.ProxmoxUpgrade {
+		tasks = append(tasks, "Proxmox upgrade")
+	}
+	if tf.Reboot {
+		tasks = append(tasks, "reboot")
+	}
+	taskStr := "no tasks configured"
+	if len(tasks) > 0 {
+		taskStr = strings.Join(tasks, ", ")
+	}
+
+	impact := fmt.Sprintf("This will run: %s", taskStr)
+	if s.HAAware {
+		if tf.Reboot {
+			impact += " — VMs will be migrated off each node before it reboots"
+		} else {
+			impact += " — VMs will be migrated off each node first"
+		}
+	}
+	if len(nodeOrder) > 0 {
+		impact += fmt.Sprintf(" (order: %s).", strings.Join(nodeOrder, " → "))
+	} else {
+		impact += "."
+	}
+	return impact
+}
 
 // maintenanceDefaultOrder returns nodes ordered safest-first for maintenance:
 // non-master members before the master, alphabetical within each group.

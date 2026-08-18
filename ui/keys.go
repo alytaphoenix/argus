@@ -101,11 +101,11 @@ func nodeHelpStr(hasSalt, hasNomad bool) string {
 	if hasNomad {
 		base += "  n nomad"
 	}
-	return styleHelp.Render(base + "  ? credentials  R refresh  q quit")
+	return styleHelp.Render(base + "  p profiles  ? keys  R refresh  q quit")
 }
 
 func guestHelpStr() string {
-	return styleHelp.Render("↑/k up  ↓/j down  space select  enter detail  s start  S stop  r reboot  t ssh  c provision  z right-size  R refresh  H help  b back  q quit")
+	return styleHelp.Render("↑/k up  ↓/j down  space select  enter detail  s start  S stop  r reboot  t ssh  c provision  z right-size  R refresh  b back  q quit")
 }
 
 func detailHelpStr() string {

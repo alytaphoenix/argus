@@ -91,13 +91,8 @@ func (m ServicesModel) addDNSCmd() tea.Cmd {
 	}
 }
 
-func (m ServicesModel) deleteDNSCmd() tea.Cmd {
+func (m ServicesModel) deleteDNSCmd(rec api.DNSRecord, zone string) tea.Cmd {
 	client := m.dnsClient
-	if len(m.dnsRecords) == 0 || m.recCursor >= len(m.dnsRecords) {
-		return nil
-	}
-	rec := m.dnsRecords[m.recCursor]
-	zone := m.dnsZone
 	value := dnsRecordValue(rec)
 	return func() tea.Msg {
 		if client == nil {
@@ -114,6 +109,7 @@ func (m ServicesModel) updateDNS(msg tea.Msg) (ServicesModel, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case dnsZonesLoadedMsg:
 		m.dnsLoading = false
+		m.dnsConfirmDelete = false
 		if msg.err != nil {
 			m.notice = "DNS: " + msg.err.Error()
 			return m, nil, true
@@ -127,6 +123,7 @@ func (m ServicesModel) updateDNS(msg tea.Msg) (ServicesModel, tea.Cmd, bool) {
 
 	case dnsRecordsLoadedMsg:
 		m.dnsLoading = false
+		m.dnsConfirmDelete = false
 		if msg.err != nil {
 			m.notice = "DNS records: " + msg.err.Error()
 			return m, nil, true
@@ -166,6 +163,18 @@ func (m ServicesModel) updateDNS(msg tea.Msg) (ServicesModel, tea.Cmd, bool) {
 }
 
 func (m ServicesModel) handleDNSTab(key string) (ServicesModel, tea.Cmd) {
+	if m.dnsConfirmDelete {
+		switch key {
+		case "y", "Y", "enter":
+			m.dnsConfirmDelete = false
+			rec, zone := m.dnsPendingRecord, m.dnsPendingZone
+			return m, m.deleteDNSCmd(rec, zone)
+		default:
+			m.dnsConfirmDelete = false
+		}
+		return m, nil
+	}
+
 	switch key {
 	case "up", "k":
 		if m.recCursor > 0 {
@@ -203,8 +212,10 @@ func (m ServicesModel) handleDNSTab(key string) (ServicesModel, tea.Cmd) {
 		m.dnsFields[m.dnsFocus].Focus()
 		return m, nil
 	case "d":
-		if len(m.dnsRecords) > 0 {
-			return m, m.deleteDNSCmd()
+		if len(m.dnsRecords) > 0 && m.recCursor < len(m.dnsRecords) {
+			m.dnsConfirmDelete = true
+			m.dnsPendingRecord = m.dnsRecords[m.recCursor]
+			m.dnsPendingZone = m.dnsZone
 		}
 	}
 	return m, nil
@@ -342,6 +353,10 @@ func (m ServicesModel) viewDNS(height int) string {
 			b.WriteString(truncate(row, m.width))
 		}
 		b.WriteString("\n")
+	}
+
+	if m.dnsConfirmDelete {
+		b.WriteString(styleError.Render(fmt.Sprintf("  Delete DNS record %q (%s)? [Y/n]", m.dnsPendingRecord.Name, m.dnsPendingRecord.Type)) + "\n")
 	}
 	return b.String()
 }

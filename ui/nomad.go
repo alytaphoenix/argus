@@ -284,7 +284,7 @@ func (m NomadModel) View() string {
 	sb.WriteString("\n")
 
 	if m.confirm && m.cursor < len(m.jobs) {
-		sb.WriteString(styleError.Render(fmt.Sprintf("  Stop %q? [y/N]", m.jobs[m.cursor].ID)) + "\n")
+		sb.WriteString(styleError.Render(fmt.Sprintf("  Stop %q? [Y/n]", m.jobs[m.cursor].ID)) + "\n")
 	} else if m.acting {
 		sb.WriteString("  " + m.spinner.View() + " stopping job...\n")
 	} else if m.notice != "" {

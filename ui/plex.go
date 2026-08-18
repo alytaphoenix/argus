@@ -36,11 +36,11 @@ type PlexModel struct {
 	width, height int
 	tab           plexTab
 
-	plexClient  *api.PlexClient
-	proxmox     *api.Client
-	trueNAS     *api.TrueNASClient
-	database    *db.DB
-	cfg         config.Config
+	plexClient *api.PlexClient
+	proxmox    *api.Client
+	trueNAS    *api.TrueNASClient
+	database   *db.DB
+	cfg        config.Config
 
 	// Status tab
 	plexStatus  *api.PlexStatus
@@ -49,15 +49,15 @@ type PlexModel struct {
 	plexOnline  bool
 
 	// Libraries tab
-	libCursor   int
-	mediaRoots  []string // media directories discovered from TrueNAS
+	libCursor  int
+	mediaRoots []string // media directories discovered from TrueNAS
 
 	// Services tab
-	services    []plexServiceState
-	svcCursor   int
+	services  []plexServiceState
+	svcCursor int
 
 	// Provision tab
-	provNotice  string
+	provNotice string
 
 	spinner spinner.Model
 	notice  string
@@ -65,14 +65,14 @@ type PlexModel struct {
 
 // plexServiceState tracks one companion service.
 type plexServiceState struct {
-	Def      api.MediaServiceDef
-	Online   bool
-	Checked  bool
-	Loading  bool
-	Status   *api.ServarrStatus
-	Enabled  bool   // configured in argus config
-	VMID     int    // Proxmox VMID if known
-	VMNode   string
+	Def     api.MediaServiceDef
+	Online  bool
+	Checked bool
+	Loading bool
+	Status  *api.ServarrStatus
+	Enabled bool // configured in argus config
+	VMID    int  // Proxmox VMID if known
+	VMNode  string
 }
 
 func NewPlexModel(plexClient *api.PlexClient, proxmox *api.Client,
@@ -316,6 +316,8 @@ func (m PlexModel) handleKey(msg tea.KeyMsg) (PlexModel, tea.Cmd) {
 		return m, nil
 	case "b", "esc":
 		return m, func() tea.Msg { return backMsg{} }
+	case "q":
+		return m, tea.Quit
 	case "R":
 		m.plexLoading = true
 		m.notice = ""
@@ -480,7 +482,7 @@ func (m PlexModel) viewStatus(height int) string {
 	} else {
 		b.WriteString(styleSubtle.Render(fmt.Sprintf("  %-3s  %-30s %-16s %-10s  %s\n",
 			"", "Title", "User", "Device", "State")))
-		b.WriteString(styleDim.Render("  " + strings.Repeat("─", min(m.width-4, 85))) + "\n")
+		b.WriteString(styleDim.Render("  "+strings.Repeat("─", min(m.width-4, 85))) + "\n")
 		for i, s := range sessions {
 			if i >= height-6 {
 				break
@@ -533,7 +535,7 @@ func (m PlexModel) viewLibraries(height int) string {
 
 	hdr := fmt.Sprintf("  %-30s %-10s %-8s  %s\n", "Library", "Type", "Count", "Location")
 	b.WriteString(styleSubtle.Render(hdr))
-	b.WriteString(styleDim.Render("  " + strings.Repeat("─", min(m.width-4, 80))) + "\n")
+	b.WriteString(styleDim.Render("  "+strings.Repeat("─", min(m.width-4, 80))) + "\n")
 
 	for i, lib := range libs {
 		if i >= height-2 {
@@ -566,7 +568,7 @@ func (m PlexModel) viewServices(height int) string {
 
 	hdr := fmt.Sprintf("  %-3s  %-12s %-32s %-8s  %s\n", "●", "Name", "Description", "Port", "Status")
 	b.WriteString(styleSubtle.Render(hdr))
-	b.WriteString(styleDim.Render("  " + strings.Repeat("─", min(m.width-4, 95))) + "\n")
+	b.WriteString(styleDim.Render("  "+strings.Repeat("─", min(m.width-4, 95))) + "\n")
 
 	for i, svc := range m.services {
 		if i >= height-4 {
@@ -660,20 +662,20 @@ func (m PlexModel) viewProvision(height int) string {
 		}
 	}
 
-	b.WriteString(styleDim.Render("\n  p = go to PXE Spawn wizard · b back\n"))
+	b.WriteString(styleDim.Render("\n  p = go to PXE Spawn wizard · b back · q quit\n"))
 	return b.String()
 }
 
 func (m PlexModel) helpStr() string {
 	switch m.tab {
 	case plexTabStatus:
-		return "  r refresh · R reload all · ←/→ tab · b back"
+		return "  r refresh · R reload all · ←/→ tab · b back · q quit"
 	case plexTabLibraries:
-		return "  ↑/↓ navigate · A auto-add from TrueNAS · ←/→ tab · b back"
+		return "  ↑/↓ navigate · A auto-add from TrueNAS · ←/→ tab · b back · q quit"
 	case plexTabServices:
-		return "  ↑/↓ navigate · r re-check · p provision info · ←/→ tab · b back"
+		return "  ↑/↓ navigate · r re-check · p provision info · ←/→ tab · b back · q quit"
 	case plexTabProvision:
-		return "  p go to PXE spawn · ←/→ tab · b back"
+		return "  p go to PXE spawn · ←/→ tab · b back · q quit"
 	}
-	return "  ←/→ tab · b back"
+	return "  ←/→ tab · b back · q quit"
 }

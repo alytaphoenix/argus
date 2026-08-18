@@ -178,12 +178,12 @@ func (c *Client) HAResources(ctx context.Context) ([]HAResource, error) {
 
 // HAResource is one HA-managed resource (VM or CT).
 type HAResource struct {
-	SID     string `json:"sid"`       // e.g. "vm:100"
-	State   string `json:"state"`     // "started"|"stopped"|"migrating"|...
-	Node    string `json:"node"`      // current home node
-	Group   string `json:"group"`
-	MaxRelocate int `json:"max_relocate"`
-	MaxRestart  int `json:"max_restart"`
+	SID         string `json:"sid"`   // e.g. "vm:100"
+	State       string `json:"state"` // "started"|"stopped"|"migrating"|...
+	Node        string `json:"node"`  // current home node
+	Group       string `json:"group"`
+	MaxRelocate int    `json:"max_relocate"`
+	MaxRestart  int    `json:"max_restart"`
 }
 
 // NodeInMaintenanceMode puts a Proxmox node into HA maintenance mode so VMs are migrated away.
@@ -321,4 +321,3 @@ func (c *Client) VMBackups(ctx context.Context, node, storage string, vmid int) 
 	})
 	return entries, nil
 }
-

@@ -91,11 +91,17 @@ func TestApplyGlobalsTimezoneCustom(t *testing.T) {
 // setEnv sets environment variables and returns a cleanup function.
 func setEnv(t *testing.T, pairs ...string) func() {
 	t.Helper()
-	var originals []struct{ key, val string; found bool }
+	var originals []struct {
+		key, val string
+		found    bool
+	}
 	for i := 0; i < len(pairs)-1; i += 2 {
 		k, v := pairs[i], pairs[i+1]
 		orig, found := os.LookupEnv(k)
-		originals = append(originals, struct{ key, val string; found bool }{k, orig, found})
+		originals = append(originals, struct {
+			key, val string
+			found    bool
+		}{k, orig, found})
 		os.Setenv(k, v)
 	}
 	return func() {

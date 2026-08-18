@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alytaphoenix/argus/api"
 	"github.com/alytaphoenix/argus/config"
@@ -91,7 +91,7 @@ type App struct {
 	claudeOverlay  ClaudeOverlayModel
 	appSettings    db.AppSettings
 	// lightweight badge state for nodes screen
-	mediaBadgePlex     *bool   // nil=unchecked, true=online, false=offline
+	mediaBadgePlex     *bool // nil=unchecked, true=online, false=offline
 	mediaBadgeServices []api.ServarrStatus
 	// alert route delivery: track last-seen counts to detect new events
 	lastCSBanCount     int // -1 = not yet loaded
@@ -108,21 +108,21 @@ func NewApp(client *api.Client, saltClient *api.SaltClient, nomadClient *api.Nom
 	sshUser, sshPassword string, defaults config.DefaultsConfig, cfg config.Config, database *db.DB,
 	guidedSetup bool) App {
 	a := App{
-		client:         client,
-		saltClient:     saltClient,
-		nomadClient:    nomadClient,
-		promClient:     promClient,
-		lokiClient:     lokiClient,
-		dnsClient:      dnsClient,
-		caClient:       caClient,
-		claudeClient:   claudeClient,
-		matchboxClient: matchboxClient,
-		csClient:       csClient,
-		wazuhClient:    wazuhClient,
-		trueNASClient:  trueNASClient,
-		plexClient:     plexClient,
-		haClient:       haClient,
-		hermesClient:   hermesClient,
+		client:             client,
+		saltClient:         saltClient,
+		nomadClient:        nomadClient,
+		promClient:         promClient,
+		lokiClient:         lokiClient,
+		dnsClient:          dnsClient,
+		caClient:           caClient,
+		claudeClient:       claudeClient,
+		matchboxClient:     matchboxClient,
+		csClient:           csClient,
+		wazuhClient:        wazuhClient,
+		trueNASClient:      trueNASClient,
+		plexClient:         plexClient,
+		haClient:           haClient,
+		hermesClient:       hermesClient,
 		database:           database,
 		sshUser:            sshUser,
 		sshPassword:        sshPassword,
@@ -144,7 +144,7 @@ func NewApp(client *api.Client, saltClient *api.SaltClient, nomadClient *api.Nom
 		// walked through instead of leaving it to manual discovery.
 		a.screen = screenOrchestrate
 		a.orch = NewOrchestrateModel(a.saltClient, a.database, a.cfg.Salt, a.trueNASClient, a.hermesClient, a.cfg,
-			a.dnsClient, a.caClient, a.plexClient)
+			a.dnsClient, a.caClient, a.plexClient, a.client)
 		a.orch.tab = orchTabBootstrap
 		a.orch.notice = "Welcome to argus — let's finish setting up your homelab. Checking service status..."
 	}
@@ -290,7 +290,6 @@ func sectionOf(s screenID) screenID {
 	}
 }
 
-
 // screenCapturesTab reports whether the active screen has a form or text
 // input open that uses tab for field navigation, in which case tab must not
 // switch sections.
@@ -336,7 +335,7 @@ func (a App) switchSection(next screenID) (App, tea.Cmd) {
 	case screenOrchestrate:
 		a.screen = screenOrchestrate
 		a.orch = NewOrchestrateModel(a.saltClient, a.database, a.cfg.Salt, a.trueNASClient, a.hermesClient, a.cfg,
-			a.dnsClient, a.caClient, a.plexClient)
+			a.dnsClient, a.caClient, a.plexClient, a.client)
 		a.orch.width, a.orch.height = a.width, a.height
 		return a, a.orch.Init()
 	case screenNomad:
@@ -554,6 +553,31 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openLifecycleMsg:
 		return a.switchSection(screenLifecycle)
 
+	case saltPollTickMsg, saltPollResultMsg:
+		// A highstate poll must reach whichever SaltModel/SaltDetailModel
+		// actually started it, not just whichever screen is active — the
+		// user can navigate away from Salt while a poll is still in
+		// flight. Forward to both; each model's own polling-map ownership
+		// guard ignores JIDs it didn't start.
+		var saltCmd, saltDetailCmd tea.Cmd
+		a.salt, saltCmd = a.salt.Update(msg)
+		a.saltDetail, saltDetailCmd = a.saltDetail.Update(msg)
+		return a, tea.Batch(saltCmd, saltDetailCmd)
+
+	case maintRunDoneMsg:
+		// Intercepted here (not left to the screen-scoped fallback dispatch
+		// below) so a run's completion is never silently dropped when the
+		// user has navigated away from Maintenance — a run can take hours,
+		// and without this the model's run list/notice would go stale until
+		// the user happens to revisit the screen and press R.
+		var maintCmd tea.Cmd
+		a.maintenance, maintCmd = a.maintenance.Update(msg)
+		if msg.err != nil {
+			fireCmd := a.alertRoutes.FireMatchingRoutes("maintenance", "high")
+			return a, tea.Batch(maintCmd, fireCmd)
+		}
+		return a, maintCmd
+
 	case crowdSecLoadedMsg:
 		var secCmd tea.Cmd
 		a.security, secCmd = a.security.Update(msg)
@@ -612,7 +636,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case schedulerTickMsg:
-		return a, tea.Batch(a.runDueSchedulesCmd(), a.schedulerTickCmd())
+		// Also refresh the nodes-screen Plex/servarr badge here — it was
+		// previously only ever computed once at startup (App.Init), so an
+		// outage after launch would show green forever.
+		return a, tea.Batch(a.runDueSchedulesCmd(), a.schedulerTickCmd(), a.checkMediaStatusCmd())
 
 	case settingsSavedMsg:
 		// Reload app settings and push to any active sub-models that hold a copy.
@@ -903,7 +930,7 @@ func (a App) mediaBadgeBanner() string {
 			}
 			parts = append(parts, badge)
 		} else {
-			parts = append(parts, lipgloss.NewStyle().Foreground(colorRed).Render("● " + name))
+			parts = append(parts, lipgloss.NewStyle().Foreground(colorRed).Render("● "+name))
 		}
 	}
 
@@ -940,4 +967,3 @@ func (a App) currentContext() string {
 		return "argus homelab dashboard"
 	}
 }
-

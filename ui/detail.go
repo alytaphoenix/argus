@@ -35,8 +35,9 @@ type DetailModel struct {
 	guest         api.Guest
 	backupStorage string
 	loading       bool
-	acting        bool // guest power actions (start/stop/reboot)
-	snapDeleting  bool // snapshot delete in progress
+	acting        bool        // guest power actions (start/stop/reboot)
+	snapDeleting  bool        // snapshot delete in progress
+	confirm       confirmKind // pending confirmation (stop/reboot/delete snapshot); see guests.go
 	notice        string
 	err           error
 	width         int
@@ -54,14 +55,14 @@ type DetailModel struct {
 	logScroll  int
 
 	// snapshot tab
-	snaps       []api.Snapshot
-	snapLoading bool
-	snapCursor  int
-	snapInput   textinput.Model
+	snaps        []api.Snapshot
+	snapLoading  bool
+	snapCursor   int
+	snapInput    textinput.Model
 	snapCreating bool
 
 	// backup tab
-	backups     []api.BackupEntry
+	backups       []api.BackupEntry
 	backupLoading bool
 }
 
@@ -191,6 +192,64 @@ func (m DetailModel) fetchBackupsCmd() tea.Cmd {
 	}
 }
 
+// nextDetailTab returns the tab that follows the current one, skipping the
+// backups tab when no backup storage is configured.
+func (m DetailModel) nextDetailTab() detailTab {
+	switch m.tab {
+	case detailTabStatus:
+		return detailTabLogs
+	case detailTabLogs:
+		return detailTabSnapshots
+	case detailTabSnapshots:
+		if m.backupStorage != "" {
+			return detailTabBackups
+		}
+		return detailTabStatus
+	case detailTabBackups:
+		return detailTabStatus
+	}
+	return detailTabStatus
+}
+
+// prevDetailTab returns the tab that precedes the current one, skipping the
+// backups tab when no backup storage is configured.
+func (m DetailModel) prevDetailTab() detailTab {
+	switch m.tab {
+	case detailTabStatus:
+		if m.backupStorage != "" {
+			return detailTabBackups
+		}
+		return detailTabSnapshots
+	case detailTabLogs:
+		return detailTabStatus
+	case detailTabSnapshots:
+		return detailTabLogs
+	case detailTabBackups:
+		return detailTabSnapshots
+	}
+	return detailTabStatus
+}
+
+// enterTab switches to the given tab, kicking off a fetch if that tab's
+// data hasn't been loaded yet (mirrors the lazy-load behavior the old
+// inline "L" cycling handler had for snapshots/backups).
+func (m *DetailModel) enterTab(t detailTab) tea.Cmd {
+	m.tab = t
+	switch t {
+	case detailTabSnapshots:
+		if len(m.snaps) == 0 && !m.snapLoading {
+			m.snapLoading = true
+			return m.fetchSnapshotsCmd()
+		}
+	case detailTabBackups:
+		if m.backupStorage != "" && len(m.backups) == 0 && !m.backupLoading {
+			m.backupLoading = true
+			return m.fetchBackupsCmd()
+		}
+	}
+	return nil
+}
+
 func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case guestStatusMsg:
@@ -259,6 +318,13 @@ func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 		} else {
 			m.snaps = msg.snaps
 			m.snapCursor = 0
+			// A refresh landing while a delete confirmation was armed
+			// invalidates the captured cursor — the confirm banner would
+			// disappear (View's bounds guard) while the intercept kept
+			// swallowing keys with no feedback. Cancel it outright.
+			if m.confirm == confirmDeleteSnapshot {
+				m.confirm = confirmNone
+			}
 		}
 		return m, nil
 
@@ -299,6 +365,32 @@ func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 		return m, cmd
 
 	case tea.KeyMsg:
+		if m.confirm != confirmNone {
+			switch msg.String() {
+			case "y", "Y", "enter":
+				switch m.confirm {
+				case confirmStop:
+					m.confirm = confirmNone
+					m.acting = true
+					return m, m.doAction("stop")
+				case confirmReboot:
+					m.confirm = confirmNone
+					m.acting = true
+					return m, m.doAction("reboot")
+				case confirmDeleteSnapshot:
+					m.confirm = confirmNone
+					if m.snapCursor < len(m.snaps) {
+						snap := m.snaps[m.snapCursor]
+						m.snapDeleting = true
+						return m, m.deleteSnapshotCmd(snap.Name)
+					}
+				}
+			default:
+				m.confirm = confirmNone
+			}
+			return m, nil
+		}
+
 		// Snapshot name input intercepts keys
 		if m.tab == detailTabSnapshots && m.snapInput.Focused() {
 			switch msg.String() {
@@ -341,29 +433,12 @@ func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 			return m, tea.Quit
 		case key.Matches(msg, keys.Back):
 			return m, func() tea.Msg { return backMsg{} }
-		case msg.String() == "L":
-			switch m.tab {
-			case detailTabStatus:
-				m.tab = detailTabLogs
-			case detailTabLogs:
-				m.tab = detailTabSnapshots
-				if len(m.snaps) == 0 && !m.snapLoading {
-					m.snapLoading = true
-					return m, m.fetchSnapshotsCmd()
-				}
-			case detailTabSnapshots:
-				if m.backupStorage != "" {
-					m.tab = detailTabBackups
-					if len(m.backups) == 0 && !m.backupLoading {
-						m.backupLoading = true
-						return m, m.fetchBackupsCmd()
-					}
-				} else {
-					m.tab = detailTabStatus
-				}
-			case detailTabBackups:
-				m.tab = detailTabStatus
-			}
+		case msg.String() == "L" || msg.String() == "right" || msg.String() == "l":
+			cmd := m.enterTab(m.nextDetailTab())
+			return m, cmd
+		case msg.String() == "left" || msg.String() == "h":
+			cmd := m.enterTab(m.prevDetailTab())
+			return m, cmd
 		case m.tab == detailTabLogs && (msg.String() == "up" || msg.String() == "k"):
 			if m.logScroll > 0 {
 				m.logScroll--
@@ -392,9 +467,7 @@ func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 			}
 		case m.tab == detailTabSnapshots && msg.String() == "d":
 			if len(m.snaps) > 0 {
-				snap := m.snaps[m.snapCursor]
-				m.snapDeleting = true
-				return m, m.deleteSnapshotCmd(snap.Name)
+				m.confirm = confirmDeleteSnapshot
 			}
 		case m.tab == detailTabBackups && msg.String() == "R":
 			if m.backupStorage != "" {
@@ -411,13 +484,11 @@ func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 			}
 		case key.Matches(msg, keys.Stop):
 			if m.guest.Status == "running" {
-				m.acting = true
-				return m, m.doAction("stop")
+				m.confirm = confirmStop
 			}
 		case key.Matches(msg, keys.Reboot):
 			if m.guest.Status == "running" {
-				m.acting = true
-				return m, m.doAction("reboot")
+				m.confirm = confirmReboot
 			}
 		case key.Matches(msg, keys.SSH):
 			if m.guest.Status == "running" {
@@ -489,7 +560,13 @@ func (m DetailModel) View() string {
 
 	sb.WriteString("\n")
 
-	if m.fetchingIP {
+	if m.confirm == confirmStop {
+		sb.WriteString(styleError.Render(fmt.Sprintf("  Stop %q? [Y/n]", g.Name)) + "\n\n")
+	} else if m.confirm == confirmReboot {
+		sb.WriteString(stylePaused.Render(fmt.Sprintf("  Reboot %q? [Y/n]", g.Name)) + "\n\n")
+	} else if m.confirm == confirmDeleteSnapshot && m.snapCursor < len(m.snaps) {
+		sb.WriteString(styleError.Render(fmt.Sprintf("  Delete snapshot %q? [Y/n]", m.snaps[m.snapCursor].Name)) + "\n\n")
+	} else if m.fetchingIP {
 		sb.WriteString("  " + m.spinner.View() + " looking up IP...\n\n")
 	} else if m.err != nil {
 		sb.WriteString(styleError.Render("  error: "+m.err.Error()) + "\n\n")
@@ -517,13 +594,13 @@ func (m DetailModel) View() string {
 func (m DetailModel) tabHelp() string {
 	switch m.tab {
 	case detailTabLogs:
-		return styleHelp.Render("↑/↓ scroll  f filter unit  R refresh  L next tab  b back  q quit")
+		return styleHelp.Render("↑/↓ scroll  f filter unit  R refresh  ←/→ tab  b back  q quit")
 	case detailTabSnapshots:
-		return styleHelp.Render("↑/↓ select  n new snapshot  d delete  R refresh  L next tab  b back  q quit")
+		return styleHelp.Render("↑/↓ select  n new snapshot  d delete  R refresh  ←/→ tab  b back  q quit")
 	case detailTabBackups:
-		return styleHelp.Render("R refresh  L next tab  b back  q quit")
+		return styleHelp.Render("R refresh  ←/→ tab  b back  q quit")
 	default:
-		return detailHelpStr() + styleHelp.Render("  L logs/snaps")
+		return detailHelpStr() + styleHelp.Render("  ←/→ tab (logs/snaps)")
 	}
 }
 

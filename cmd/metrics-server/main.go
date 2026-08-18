@@ -221,7 +221,9 @@ func generateScrapeConfig(cfg *config.Config) string {
 		sb.WriteString("      - targets: [" + nomadHost + "]\n")
 		if cfg.Nomad.Token != "" {
 			sb.WriteString("    authorization:\n")
-			sb.WriteString("      credentials: " + cfg.Nomad.Token + "\n")
+			sb.WriteString("      # credentials masked — this endpoint is unauthenticated; copy the real\n")
+			sb.WriteString("      # token from your argus config/keychain into your Prometheus config directly\n")
+			sb.WriteString("      credentials: \"" + strings.Repeat("*", min(len(cfg.Nomad.Token), 8)) + "\"\n")
 		}
 		sb.WriteString("\n")
 	} else {

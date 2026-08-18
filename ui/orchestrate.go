@@ -51,11 +51,22 @@ type orchBootstrapActionDialog struct {
 
 // orchProvisionConfirm is shown after the provision form is submitted, before running state.apply.
 type orchProvisionConfirm struct {
-	svcID      string
-	svcName    string
-	target     string
-	state      string
-	derivedURL string // non-empty when a bootstrapSpec can derive the URL from target+domain
+	svcID         string
+	svcName       string
+	target        string
+	state         string
+	derivedURL    string // non-empty when a bootstrapSpec can derive the URL from target+domain
+	targetWarning string // non-empty when target doesn't match any accepted Salt minion
+}
+
+// discoveredGuest is one Proxmox guest found during cluster discovery, tagged
+// with whether argus itself provisioned it. Salt-minion matching is done
+// lazily at point of use (against the current m.keys.Accepted) rather than
+// stored here, since accepted-key data may not be loaded yet when discovery
+// runs — they're independent async commands batched together at startup.
+type discoveredGuest struct {
+	Guest        api.Guest
+	ArgusManaged bool // has a row in provisioned_vms
 }
 
 // bootstrapSvcSpec holds URL-derivation conventions for a bootstrap service.
@@ -64,8 +75,8 @@ type orchProvisionConfirm struct {
 type bootstrapSvcSpec struct {
 	protocol    string
 	port        int
-	deps        []string                       // IDs of services that must be OK first (advisory)
-	patchConfig func(*config.Config, string)   // writes derived URL into cfg
+	deps        []string                     // IDs of services that must be OK first (advisory)
+	patchConfig func(*config.Config, string) // writes derived URL into cfg
 }
 
 func (s bootstrapSvcSpec) deriveURL(target, domain string) string {
@@ -130,12 +141,13 @@ const (
 var orchTabLabels = []string{"Keys", "Pending", "Pillar", "Bootstrap"}
 
 // orchConfirm holds state for the confirmation dialog shown before key
-// acceptance or rejection.
+// acceptance/rejection or a cluster pillar entry delete.
 type orchConfirm struct {
-	action  string // "accept" or "reject"
-	minion  string
-	profile string // matched salt profile name, or ""
-	vmid    int    // matched provisioned_vm VMID, or 0
+	action    string // "accept", "reject", or "delete_pillar"
+	minion    string
+	profile   string // matched salt profile name, or ""
+	vmid      int    // matched provisioned_vm VMID, or 0
+	pillarKey string // pillar key being deleted, for action == "delete_pillar"
 }
 
 // orchPillarForm is the inline form for adding a pillar entry or a bootstrap
@@ -149,21 +161,31 @@ type orchPillarForm struct {
 // OrchestrateModel manages the Salt orchestration screen: key acceptance,
 // pending VM salt applies, cluster pillar management, and bootstrap execution.
 type OrchestrateModel struct {
-	saltClient   *api.SaltClient
-	database     *db.DB
-	saltCfg      config.SaltConfig
-	truenas      *api.TrueNASClient
-	hermesClient *api.HermesClient
-	dnsClient    *api.TechnitiumClient
-	caClient     *api.StepCAClient
-	plexClient   *api.PlexClient
-	cfg          config.Config
+	saltClient    *api.SaltClient
+	database      *db.DB
+	saltCfg       config.SaltConfig
+	truenas       *api.TrueNASClient
+	hermesClient  *api.HermesClient
+	dnsClient     *api.TechnitiumClient
+	caClient      *api.StepCAClient
+	plexClient    *api.PlexClient
+	proxmoxClient *api.Client
+	cfg           config.Config
 
 	tab     orchTab
 	cursor  int
 	keys    *api.SaltKeys
 	pending []db.ProvisionedVM
 	pillar  []db.ClusterPillarEntry
+
+	// Cluster discovery (Bootstrap tab) — live Proxmox inventory, refreshed
+	// alongside every service check so Bootstrap knows what already exists
+	// before suggesting a Salt provision action.
+	clusterGuests           []discoveredGuest
+	clusterDiscovered       bool
+	clusterDiscoverErr      error
+	clusterUnreachableNodes int   // nodes whose Guests() call failed on the last successful scan
+	clusterDBErr            error // ProvisionedVMs() failure on the last scan — managed/unmanaged split may be inaccurate
 
 	acting  bool
 	notice  string
@@ -172,14 +194,14 @@ type OrchestrateModel struct {
 	form    *orchPillarForm // pillar tab form
 
 	// Bootstrap tab state
-	bootstrapServices  []bootstrapService
-	bsvcActionDialog   *orchBootstrapActionDialog
-	provisionForm      *orchPillarForm       // bootstrap provision (target, state)
-	provisionConfirm   *orchProvisionConfirm // confirm before running state.apply
-	provisioningFor    string                // service id being provisioned
-	provisionQueue     []string              // remaining service IDs to provision in order
-	activeJID          string                // JID of currently-running provision job
-	provisionDerivedURL string               // URL derived from target+domain, carried through provision→done
+	bootstrapServices   []bootstrapService
+	bsvcActionDialog    *orchBootstrapActionDialog
+	provisionForm       *orchPillarForm       // bootstrap provision (target, state)
+	provisionConfirm    *orchProvisionConfirm // confirm before running state.apply
+	provisioningFor     string                // service id being provisioned
+	provisionQueue      []string              // remaining service IDs to provision in order
+	activeJID           string                // JID of currently-running provision job
+	provisionDerivedURL string                // URL derived from target+domain, carried through provision→done
 
 	width, height int
 	spinner       spinner.Model
@@ -189,6 +211,7 @@ func NewOrchestrateModel(
 	saltClient *api.SaltClient, database *db.DB, saltCfg config.SaltConfig,
 	truenas *api.TrueNASClient, hermesClient *api.HermesClient, cfg config.Config,
 	dnsClient *api.TechnitiumClient, caClient *api.StepCAClient, plexClient *api.PlexClient,
+	proxmoxClient *api.Client,
 ) OrchestrateModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -201,6 +224,7 @@ func NewOrchestrateModel(
 		dnsClient:         dnsClient,
 		caClient:          caClient,
 		plexClient:        plexClient,
+		proxmoxClient:     proxmoxClient,
 		cfg:               cfg,
 		spinner:           s,
 		bootstrapServices: defaultBootstrapServices(),
@@ -462,13 +486,153 @@ func (m OrchestrateModel) syncTrueNASCmd() tea.Cmd {
 	}
 }
 
-// checkAllServicesCmd runs all bootstrap service checks in parallel.
+// checkAllServicesCmd runs all bootstrap service checks in parallel, plus a
+// live Proxmox cluster discovery so Bootstrap knows what already exists
+// before suggesting a Salt provision action.
 func (m OrchestrateModel) checkAllServicesCmd() tea.Cmd {
-	cmds := make([]tea.Cmd, len(m.bootstrapServices))
-	for i, svc := range m.bootstrapServices {
-		cmds[i] = m.checkSvcCmd(svc.id)
+	cmds := make([]tea.Cmd, 0, len(m.bootstrapServices)+1)
+	cmds = append(cmds, m.discoverClusterCmd())
+	for _, svc := range m.bootstrapServices {
+		cmds = append(cmds, m.checkSvcCmd(svc.id))
 	}
 	return tea.Batch(cmds...)
+}
+
+// discoverClusterCmd inventories every Proxmox guest across all nodes and
+// cross-references it against provisioned_vms, tagging each as argus-managed
+// or not. It never touches Salt minion data directly (see discoveredGuest).
+func (m OrchestrateModel) discoverClusterCmd() tea.Cmd {
+	client := m.proxmoxClient
+	database := m.database
+	return func() tea.Msg {
+		if client == nil {
+			return orchClusterDiscoverDoneMsg{}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		nodes, err := client.Nodes(ctx)
+		if err != nil {
+			return orchClusterDiscoverDoneMsg{err: err}
+		}
+		managedVMIDs := map[int]bool{}
+		var dbErr error
+		if database != nil {
+			if pvs, pvErr := database.ProvisionedVMs(); pvErr == nil {
+				for _, pv := range pvs {
+					managedVMIDs[pv.VMID] = true
+				}
+			} else {
+				dbErr = pvErr
+			}
+		}
+		var all []discoveredGuest
+		unreachable := 0
+		for _, n := range nodes {
+			// Each node gets its own bounded sub-timeout (still capped by the
+			// outer ctx) so one hung/offline node can't consume the whole
+			// budget and starve every node after it in the loop.
+			nodeCtx, nodeCancel := context.WithTimeout(ctx, 5*time.Second)
+			guests, gErr := client.Guests(nodeCtx, n.Name)
+			nodeCancel()
+			if gErr != nil {
+				unreachable++
+				continue // best-effort per node — one unreachable node shouldn't blank the whole inventory
+			}
+			for _, g := range guests {
+				all = append(all, discoveredGuest{Guest: g, ArgusManaged: managedVMIDs[g.VMID]})
+			}
+		}
+		return orchClusterDiscoverDoneMsg{guests: all, unreachableNodes: unreachable, dbErr: dbErr}
+	}
+}
+
+// bootstrapServiceKeywordOrder maps hostname substrings (checked against a
+// canonicalized, alphanumeric-only guest name) to the bootstrap service they
+// likely belong to. Keywords are long enough to avoid false positives (e.g.
+// "certs"/"stepca", not a bare "ca" that would match "cache-01"). Checked in
+// slice order (a plain map would iterate in randomized order in Go, making a
+// hostname that matches two services' keywords classify nondeterministically
+// across calls) — order follows defaultBootstrapServices()'s catalog order.
+var bootstrapServiceKeywordOrder = []struct {
+	svcID    string
+	keywords []string
+}{
+	{"dns", []string{"dns", "technitium"}},
+	{"certs", []string{"stepca", "certs"}},
+	{"truenas", []string{"truenas"}},
+	{"plex", []string{"plex"}},
+	{"servarr", []string{"sonarr", "radarr", "lidarr", "readarr", "prowlarr", "bazarr", "overseerr", "tautulli", "servarr"}},
+	{"hermes", []string{"hermes"}},
+	{"signal", []string{"signal"}},
+}
+
+// canonicalizeHostname lowercases and strips everything but letters/digits,
+// so "step-ca-01" and "stepCA01" both compare as "stepca01".
+func canonicalizeHostname(s string) string {
+	s = strings.ToLower(s)
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// matchBootstrapService returns the bootstrap service ID a guest name likely
+// belongs to, or "" if none of the known keywords match.
+func matchBootstrapService(guestName string) string {
+	canon := canonicalizeHostname(guestName)
+	if canon == "" {
+		return ""
+	}
+	for _, entry := range bootstrapServiceKeywordOrder {
+		for _, kw := range entry.keywords {
+			if strings.Contains(canon, kw) {
+				return entry.svcID
+			}
+		}
+	}
+	return ""
+}
+
+// matchAcceptedMinion fold-matches name against the currently accepted Salt
+// minions and returns the exact accepted minion ID (correct case) if found,
+// or "" otherwise. Salt's default glob targeting is case-sensitive, so
+// callers that need to actually target a minion must use the returned ID,
+// not the input name.
+func (m OrchestrateModel) matchAcceptedMinion(name string) string {
+	for _, accepted := range m.knownMinions() {
+		if strings.EqualFold(accepted, name) {
+			return accepted
+		}
+	}
+	return ""
+}
+
+// discoveredGuestForService looks for a discovered, argus-unmanaged guest
+// whose name suggests it already provides the given bootstrap service. It
+// prefers a guest that's already an accepted Salt minion (returning its
+// exact-case minion ID) over one that isn't, falling back to the first
+// name-only match if no minion candidate exists.
+func (m OrchestrateModel) discoveredGuestForService(svcID string) (dg discoveredGuest, minionID string, found bool) {
+	var fallback discoveredGuest
+	haveFallback := false
+	for _, g := range m.clusterGuests {
+		if g.ArgusManaged || matchBootstrapService(g.Guest.Name) != svcID {
+			continue
+		}
+		if id := m.matchAcceptedMinion(g.Guest.Name); id != "" {
+			return g, id, true
+		}
+		if !haveFallback {
+			fallback, haveFallback = g, true
+		}
+	}
+	if haveFallback {
+		return fallback, "", true
+	}
+	return discoveredGuest{}, "", false
 }
 
 // checkSvcCmd runs a health check for one bootstrap service.
@@ -838,6 +1002,19 @@ func hostFromURL(rawURL string) string {
 	return s
 }
 
+// joinAdvisory combines two optional advisory strings with a separator,
+// skipping either side if empty.
+func joinAdvisory(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	default:
+		return a + "; " + b
+	}
+}
+
 // knownMinions returns the list of accepted Salt minion names for provision form hints.
 func (m OrchestrateModel) knownMinions() []string {
 	if m.keys == nil {
@@ -1016,10 +1193,20 @@ func (m OrchestrateModel) Update(msg tea.Msg) (OrchestrateModel, tea.Cmd) {
 			m.provisionQueue = m.provisionQueue[1:]
 			nextSvc := m.bootstrapServiceByID(nextID)
 			m.provisioningFor = nextID
-			m.provisionForm = newProvisionForm("", "services."+nextID, m.knownMinions())
+			m.provisionForm = m.openProvisionFormFor(nextID)
 			m.notice = fmt.Sprintf("queue: next is %s — fill in target minion", nextSvc.name)
 		}
 		return m, tea.Batch(cmds...)
+
+	case orchClusterDiscoverDoneMsg:
+		m.clusterDiscovered = true
+		m.clusterDiscoverErr = msg.err
+		if msg.err == nil {
+			m.clusterGuests = msg.guests
+			m.clusterUnreachableNodes = msg.unreachableNodes
+			m.clusterDBErr = msg.dbErr
+		}
+		return m, nil
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -1051,14 +1238,26 @@ func (m OrchestrateModel) handleKey(msg tea.KeyMsg) (OrchestrateModel, tea.Cmd) 
 	// Confirmation dialog (key accept/reject).
 	if m.confirm != nil {
 		switch msg.String() {
-		case "y", "enter":
+		case "y", "Y", "enter":
+			c := m.confirm
+			if c.action == "delete_pillar" {
+				m.confirm = nil
+				if err := m.database.DeleteClusterPillarKey(c.pillarKey); err != nil {
+					m.err = err
+				} else {
+					m.notice = "deleted " + c.pillarKey
+					if m.cursor > 0 {
+						m.cursor--
+					}
+				}
+				return m, m.loadPillarCmd()
+			}
 			if m.acting {
 				return m, nil
 			}
 			m.acting = true
-			c := m.confirm
 			return m, m.applyKeyActionCmd(c.action, c.minion, c.profile, c.vmid)
-		case "n", "esc":
+		default:
 			m.confirm = nil
 		}
 		return m, nil
@@ -1122,7 +1321,7 @@ func (m OrchestrateModel) handleKey(msg tea.KeyMsg) (OrchestrateModel, tea.Cmd) 
 			firstID := queue[0]
 			m.provisionQueue = queue[1:]
 			m.provisioningFor = firstID
-			m.provisionForm = newProvisionForm("", "services."+firstID, m.knownMinions())
+			m.provisionForm = m.openProvisionFormFor(firstID)
 			m.notice = fmt.Sprintf("provision queue: %d service(s), starting with %s", len(queue), m.bootstrapServiceByID(firstID).name)
 		}
 	case "enter":
@@ -1142,21 +1341,32 @@ func (m OrchestrateModel) handleKey(msg tea.KeyMsg) (OrchestrateModel, tea.Cmd) 
 				}
 			case bsvcMissing:
 				opts := []string{"Provision via Salt", "Skip"}
+				detail := depHint
 				if svc.id == "salt_master" {
 					opts = []string{"Configure in argus config", "Skip"}
+				} else if dg, minionID, found := m.discoveredGuestForService(svc.id); found {
+					if minionID != "" {
+						detail = joinAdvisory(detail, fmt.Sprintf("found existing minion '%s' (VMID %d, node %s) — pre-filled as target", minionID, dg.Guest.VMID, dg.Guest.Node))
+					} else {
+						detail = joinAdvisory(detail, fmt.Sprintf("found unmanaged VM '%s' (VMID %d, node %s) — accept its Salt key on the Keys tab first, then target it here", dg.Guest.Name, dg.Guest.VMID, dg.Guest.Node))
+					}
 				}
 				m.bsvcActionDialog = &orchBootstrapActionDialog{
 					service: svc.id,
 					status:  svc.status,
 					opts:    opts,
-					detail:  depHint,
+					detail:  detail,
 				}
 			case bsvcPartial:
+				detail := depHint
+				if _, minionID, found := m.discoveredGuestForService(svc.id); found && minionID != "" {
+					detail = joinAdvisory(detail, fmt.Sprintf("found existing minion '%s' — will be pre-filled as target if you re-apply", minionID))
+				}
 				m.bsvcActionDialog = &orchBootstrapActionDialog{
 					service: svc.id,
 					status:  svc.status,
 					opts:    []string{"Wire up what exists", "Re-apply Salt state", "Skip"},
-					detail:  depHint,
+					detail:  detail,
 				}
 			case bsvcOK:
 				m.bsvcActionDialog = &orchBootstrapActionDialog{
@@ -1201,15 +1411,7 @@ func (m OrchestrateModel) handleKey(msg tea.KeyMsg) (OrchestrateModel, tea.Cmd) 
 		}
 	case "d":
 		if m.tab == orchTabPillar && m.cursor < len(m.pillar) {
-			if err := m.database.DeleteClusterPillarKey(m.pillar[m.cursor].Key); err != nil {
-				m.err = err
-			} else {
-				m.notice = "deleted " + m.pillar[m.cursor].Key
-				if m.cursor > 0 {
-					m.cursor--
-				}
-			}
-			return m, m.loadPillarCmd()
+			m.confirm = &orchConfirm{action: "delete_pillar", pillarKey: m.pillar[m.cursor].Key}
 		}
 	}
 	return m, nil
@@ -1313,7 +1515,7 @@ func (m OrchestrateModel) executeBootstrapAction(svcID, opt string) (Orchestrate
 	case opt == "Configure in argus config":
 		m.notice = "Run: argus config — fill the Salt section, save, then press x to re-check"
 	case opt == "Provision via Salt" || opt == "Re-apply Salt state":
-		m.provisionForm = newProvisionForm("", "services."+svcID, m.knownMinions())
+		m.provisionForm = m.openProvisionFormFor(svcID)
 		m.provisioningFor = svcID
 	case opt == "Wire up what exists" || opt == "Ingest / wire up":
 		for i, svc := range m.bootstrapServices {
@@ -1380,14 +1582,43 @@ func (m OrchestrateModel) submitProvisionForm() (OrchestrateModel, tea.Cmd) {
 	if spec, ok := bootstrapSpecs[svcID]; ok && spec.patchConfig != nil {
 		derivedURL = spec.deriveURL(target, m.cfg.Globals.Domain)
 	}
+	var targetWarning string
+	if m.keys != nil {
+		// Salt's default glob targeting is case-sensitive, so an exact-case
+		// match is required — matchAcceptedMinion fold-matches to find a
+		// candidate but returns its real casing, letting us tell "no such
+		// minion" apart from "right minion, wrong case".
+		if exact := m.matchAcceptedMinion(target); exact != target {
+			if exact == "" {
+				targetWarning = fmt.Sprintf("'%s' does not match any accepted Salt minion — state.apply may fail, or if this is a glob it could target unintended systems", target)
+			} else {
+				targetWarning = fmt.Sprintf("'%s' doesn't exactly match accepted minion '%s' (case differs) — Salt targeting is case-sensitive; did you mean '%s'?", target, exact, exact)
+			}
+		}
+	}
 	m.provisionConfirm = &orchProvisionConfirm{
-		svcID:      svcID,
-		svcName:    svc.name,
-		target:     target,
-		state:      state,
-		derivedURL: derivedURL,
+		svcID:         svcID,
+		svcName:       svc.name,
+		target:        target,
+		state:         state,
+		derivedURL:    derivedURL,
+		targetWarning: targetWarning,
 	}
 	return m, nil
+}
+
+// openProvisionFormFor builds the bootstrap provision form for svcID,
+// prefilling the target when cluster discovery found an already-accepted
+// minion candidate. Used by all three entry points into provisioning (the
+// per-service action dialog, the "P" bulk-queue shortcut, and the
+// queue-advance step after a provision completes) so they behave
+// consistently instead of only the dialog path getting discovery's benefit.
+func (m OrchestrateModel) openProvisionFormFor(svcID string) *orchPillarForm {
+	target := ""
+	if _, minionID, found := m.discoveredGuestForService(svcID); found && minionID != "" {
+		target = minionID
+	}
+	return newProvisionForm(target, "services."+svcID, m.knownMinions())
 }
 
 func newProvisionForm(target, defaultState string, knownMinions []string) *orchPillarForm {
@@ -1543,6 +1774,8 @@ func (m OrchestrateModel) View() string {
 			queueStr = fmt.Sprintf("  (%d more in queue)", len(m.provisionQueue))
 		}
 		help = styleDim.Render("tab") + " next  " + styleDim.Render("ctrl+s") + " confirm  " + styleDim.Render("esc") + " cancel" + styleDim.Render(queueStr)
+	case m.confirm != nil:
+		help = styleBold.Render("y/enter") + " confirm  " + styleDim.Render("n/esc") + " cancel"
 	case m.tab == orchTabKeys:
 		help = styleDim.Render("a") + " accept  " + styleDim.Render("r") + " reject  " + styleDim.Render("R") + " refresh  " + styleDim.Render("b") + " back"
 	case m.tab == orchTabPending:
@@ -1677,9 +1910,9 @@ func (m OrchestrateModel) renderPillarForm() string {
 	sb.WriteString(styleBold.Render("New cluster pillar entry") + "\n\n")
 	labels := []string{"Key", "Value", "Source"}
 	for i, inp := range m.form.inputs {
-		label := styleDim.Render(labels[i]+": ")
+		label := styleDim.Render(labels[i] + ": ")
 		if i == m.form.focused {
-			label = styleBold.Render(labels[i]+": ")
+			label = styleBold.Render(labels[i] + ": ")
 		}
 		sb.WriteString(label + inp.View() + "\n")
 	}
@@ -1709,6 +1942,32 @@ func bsvcStatusLabel(s bsvcStatus) string {
 func (m OrchestrateModel) viewBootstrap() string {
 	var sb strings.Builder
 	sb.WriteString(styleBold.Render("Bootstrap — check and wire up homelab services") + "\n\n")
+
+	switch {
+	case m.clusterDiscoverErr != nil:
+		msg := "cluster inventory: unavailable (" + m.clusterDiscoverErr.Error() + ")"
+		if len(m.clusterGuests) > 0 {
+			msg += " — showing last successful scan, may be stale"
+		}
+		sb.WriteString(styleDim.Render(msg) + "\n\n")
+	case m.clusterDiscovered:
+		managed, unmanaged := 0, 0
+		for _, g := range m.clusterGuests {
+			if g.ArgusManaged {
+				managed++
+			} else {
+				unmanaged++
+			}
+		}
+		line := fmt.Sprintf("cluster inventory: %d VM/LXC found — %d argus-managed, %d unmanaged", len(m.clusterGuests), managed, unmanaged)
+		if m.clusterUnreachableNodes > 0 {
+			line += fmt.Sprintf(" (%d node(s) unreachable — incomplete)", m.clusterUnreachableNodes)
+		}
+		if m.clusterDBErr != nil {
+			line += " (managed/unmanaged split may be inaccurate — db lookup failed)"
+		}
+		sb.WriteString(styleDim.Render(line) + "\n\n")
+	}
 
 	hdr := fmt.Sprintf("%-3s  %-9s  %-22s  %s", "#", "STATUS", "SERVICE", "DETAIL")
 	sb.WriteString(styleDim.Render(hdr) + "\n")
@@ -1767,9 +2026,9 @@ func (m OrchestrateModel) viewProvisionForm() string {
 	sb.WriteString(styleBold.Render("Provision "+svc.name+" via Salt") + "\n\n")
 	labels := []string{"Target minion", "Salt state   "}
 	for i, inp := range m.provisionForm.inputs {
-		label := styleDim.Render(labels[i]+": ")
+		label := styleDim.Render(labels[i] + ": ")
 		if i == m.provisionForm.focused {
-			label = styleBold.Render(labels[i]+": ")
+			label = styleBold.Render(labels[i] + ": ")
 		}
 		sb.WriteString(label + inp.View() + "\n")
 		if i == 0 {
@@ -1796,6 +2055,9 @@ func (m OrchestrateModel) viewProvisionConfirm() string {
 	var sb strings.Builder
 	sb.WriteString(styleBold.Render("Confirm: provision "+c.svcName) + "\n\n")
 	sb.WriteString(fmt.Sprintf("Will run:  %s\n", styleBold.Render("salt '"+c.target+"' state.apply "+c.state)))
+	if c.targetWarning != "" {
+		sb.WriteString(styleError.Render("⚠  "+c.targetWarning) + "\n")
+	}
 	if c.derivedURL != "" {
 		sb.WriteString(styleDim.Render("On success: writes config.toml — "+c.svcID+" url = "+c.derivedURL) + "\n")
 		sb.WriteString(styleDim.Render("            (reformats config.toml; comments preserved as generated header)") + "\n")
@@ -1863,6 +2125,13 @@ func (m OrchestrateModel) ReloadConfig(cfg config.Config,
 func (m OrchestrateModel) viewConfirm() string {
 	c := m.confirm
 	var sb strings.Builder
+	if c.action == "delete_pillar" {
+		sb.WriteString(styleBold.Render("Confirm delete pillar key") + "\n\n")
+		sb.WriteString(fmt.Sprintf("Delete pillar key %q? this will need to be re-pushed to re-add it\n", c.pillarKey))
+		sb.WriteString("\n")
+		sb.WriteString(styleBold.Render("y") + "/" + styleBold.Render("enter") + " confirm  " + styleDim.Render("n/esc") + " cancel")
+		return sb.String()
+	}
 	sb.WriteString(styleBold.Render(fmt.Sprintf("Confirm %s key", c.action)) + "\n\n")
 	sb.WriteString(fmt.Sprintf("Minion:  %s\n", styleBold.Render(c.minion)))
 	if c.profile != "" {
@@ -1871,6 +2140,6 @@ func (m OrchestrateModel) viewConfirm() string {
 		sb.WriteString(styleDim.Render("No matching provisioned VM found — key only, no auto-apply.") + "\n")
 	}
 	sb.WriteString("\n")
-	sb.WriteString(styleBold.Render("y") + " confirm  " + styleDim.Render("n/esc") + " cancel")
+	sb.WriteString(styleBold.Render("y") + "/" + styleBold.Render("enter") + " confirm  " + styleDim.Render("n/esc") + " cancel")
 	return sb.String()
 }
