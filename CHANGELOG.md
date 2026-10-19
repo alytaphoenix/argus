@@ -4,6 +4,31 @@ All notable changes to argus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-10-19
+
+### Added
+
+- `argus bootstrap plan|apply|status|formulas` with an idempotent,
+  state-aware platform bootstrap.
+- Isolated Salt 3008.x runtime on Proxmox hosts: venv install, systemd units,
+  PVE-CA-signed salt-api TLS, dedicated `saltapi` PAM user, local minion, and
+  firewall-friendly ports.
+- Opinionated Salt formula registry with dependency resolution, built-in SLS
+  files, integration entries, baseline/recommended sets, and health metadata.
+- Top-level **Bootstrap** TUI screen showing platform readiness and formula
+  apply status, with select/apply/baseline/filter actions.
+- SQLite tracking for `platform_profiles`, `formula_installations`, and
+  `bootstrap_runs`.
+- `[bootstrap]` configuration and environment overrides.
+
+### Security
+
+- Salt API is TLS-only with a PVE-CA certificate, a non-root PAM user, and a
+  minimal `netapi_enable_clients` list (`local`, `local_async`, `wheel`,
+  `runner`).
+- Bootstrap only reports and applies additive states; it never deletes guests,
+  storage, or Proxmox configuration.
+
 ## [0.1.1] - 2026-10-19
 
 First public release. Includes the security hardening, host deployment

@@ -62,6 +62,27 @@ func renderConfig(cfg *Config) string {
 		writeStr(&b, "admin_email", g.AdminEmail)
 	}
 
+	// ── Bootstrap ───────────────────────────────────────────────────────────────
+	bs := cfg.Bootstrap
+	hasBootstrap := (bs.SSHUser != "" && bs.SSHUser != "root") ||
+		(bs.SSHKey != "" && bs.SSHKey != g.SSHKey) ||
+		bs.SaltMasterID != "" || bs.SaltAPIURL != "" ||
+		(bs.SaltAPIUser != "" && bs.SaltAPIUser != "saltapi")
+	if hasBootstrap {
+		fmt.Fprint(&b, "\n[bootstrap]\n")
+		if bs.SSHUser != "" && bs.SSHUser != "root" {
+			writeStr(&b, "ssh_user", bs.SSHUser)
+		}
+		if bs.SSHKey != "" && bs.SSHKey != g.SSHKey {
+			writeStr(&b, "ssh_key", bs.SSHKey)
+		}
+		writeStr(&b, "salt_master_id", bs.SaltMasterID)
+		writeStr(&b, "salt_api_url", bs.SaltAPIURL)
+		if bs.SaltAPIUser != "" && bs.SaltAPIUser != "saltapi" {
+			writeStr(&b, "salt_api_user", bs.SaltAPIUser)
+		}
+	}
+
 	// ── VM Defaults ─────────────────────────────────────────────────────────────
 	d := cfg.Defaults
 	// SSHUser and SearchDomain are propagated from globals; only write if explicitly different.

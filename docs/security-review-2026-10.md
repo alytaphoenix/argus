@@ -35,6 +35,7 @@ found and remediated:
 | Deployed binaries were built with Go 1.26.3. | Redeployed `0.1.1` binaries built with Go 1.26.9. |
 | Proxmox client used `insecure = true`. | PVE CA installed in the host trust store and the macOS login keychain; `insecure = false` on both; API/TUI verified over verified TLS. |
 | Stale/rejected `proxmox_password` remained in the macOS keychain. | Removed; only the scoped token secret remains. |
+| No Salt automation layer. | Salt 3008.3 runs from an isolated venv; `salt-api` uses a PVE-CA cert and dedicated `saltapi` PAM user; `netapi_enable_clients` is limited to `local`, `local_async`, `wheel`, `runner`; local minion key accepted. |
 | `config.toml` backups could contain the old root token secret. | Backups removed; current config is mode `0600`. |
 
 VM firewall flags are unset for VMs `100`, `101`, and `103`; all three remained

@@ -20,6 +20,8 @@ main.go              TUI entry point, embedded metrics server, first-run setup
 cmd/metrics-server   Standalone Prometheus exporter
 cmd/mcp-server       MCP stdio server
 api/                 HTTP/Salt/Proxmox/... clients, one file per integration
+bootstrap/           Salt installer, platform planner, formula materialization
+formula/             Opinionated Salt formula registry and dependency resolver
 config/              TOML + environment loading, validation, config editor I/O
 db/                  SQLite schema, migrations, and query helpers
 keyring/             OS keychain wrapper (macOS Keychain, Secret Service, Windows)
@@ -47,19 +49,20 @@ Top-level sections:
 1. Proxmox nodes and guests
 2. Salt minions (optional)
 3. Orchestrator: keys, pending VMs, cluster pillar, Bootstrap
-4. Nomad jobs (optional)
-5. Profiles: cloud-init and Salt profiles
-6. Metrics: Prometheus, local history, Loki
-7. Services: health checks, DNS, certificates, TrueNAS, Home Assistant
-8. PXE / Matchbox
-9. Security: CrowdSec, Wazuh, port scan
-10. Maintenance: cluster updates and reboots
-11. Plex / Servarr
-12. Runbooks
-13. Alert routes
-14. Lifecycle policies
-15. Settings
-16. Keys / credentials
+4. Bootstrap: platform readiness + Salt formula registry
+5. Nomad jobs (optional)
+6. Profiles: cloud-init and Salt profiles
+7. Metrics: Prometheus, local history, Loki
+8. Services: health checks, DNS, certificates, TrueNAS, Home Assistant
+9. PXE / Matchbox
+10. Security: CrowdSec, Wazuh, port scan
+11. Maintenance: cluster updates and reboots
+12. Plex / Servarr
+13. Runbooks
+14. Alert routes
+15. Lifecycle policies
+16. Settings
+17. Keys / credentials
 
 Some screens are hidden when their integration is not configured (Salt,
 Nomad), while Orchestrator and Bootstrap remain available because Bootstrap is
@@ -78,9 +81,12 @@ the guided setup path for those services.
   and only proposes provisioning when a service is missing. Existing guests
   are treated as unmanaged and are never reprovisioned automatically.
 - **SQLite** stores profiles, provisioning history, service registry entries,
-  health checks, metrics history, runbooks, maintenance schedules, and cluster
-  pillar entries. WAL mode is enabled; migrations are idempotent and run at
-  open.
+  health checks, metrics history, runbooks, maintenance schedules, cluster
+  pillar entries, platform profiles, formula installations, and bootstrap
+  runs. WAL mode is enabled; migrations are idempotent and run at open.
+- **Bootstrap** plans from live Proxmox/Salt/SSH state, installs Salt in an
+  isolated venv, materializes the formula registry under `/srv/salt/argus`,
+  applies states through salt-api, and records each run.
 - **Keychain** stores secrets that should not be written to disk. Config file
   values are fallbacks; keychain values win when present.
 

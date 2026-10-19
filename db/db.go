@@ -592,6 +592,48 @@ CREATE TABLE IF NOT EXISTS cluster_pillar (
 		return err
 	}
 
+	// v18 — bootstrap platform state and formula registry tracking.
+	if _, err := d.sql.Exec(`
+CREATE TABLE IF NOT EXISTS formula_installations (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    formula_id    TEXT NOT NULL,
+    target        TEXT NOT NULL,
+    state         TEXT NOT NULL DEFAULT '',
+    version       TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT '',
+    pillar_json   TEXT NOT NULL DEFAULT '{}',
+    error         TEXT NOT NULL DEFAULT '',
+    applied_at    DATETIME NOT NULL,
+    updated_at    DATETIME NOT NULL,
+    UNIQUE(formula_id, target)
+);
+
+CREATE TABLE IF NOT EXISTS bootstrap_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    host          TEXT NOT NULL,
+    mode          TEXT NOT NULL,
+    status        TEXT NOT NULL,
+    plan_json     TEXT NOT NULL DEFAULT '',
+    log           TEXT NOT NULL DEFAULT '',
+    error         TEXT NOT NULL DEFAULT '',
+    started_at    DATETIME NOT NULL,
+    finished_at   DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS platform_profiles (
+    host            TEXT PRIMARY KEY,
+    salt_master_id  TEXT NOT NULL DEFAULT '',
+    salt_api_url    TEXT NOT NULL DEFAULT '',
+    salt_api_user   TEXT NOT NULL DEFAULT '',
+    salt_version    TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT '',
+    details_json    TEXT NOT NULL DEFAULT '{}',
+    last_checked    DATETIME NOT NULL
+);
+`); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -2780,4 +2822,192 @@ func (d *DB) TouchLifecyclePolicy(id int64) error {
 	now := time.Now()
 	_, err := d.sql.Exec(`UPDATE vm_lifecycle_policies SET last_run=? WHERE id=?`, now, id)
 	return err
+}
+
+// ── Bootstrap / formula registry ─────────────────────────────────────────────
+
+// FormulaInstallation records the last apply of a formula on a target.
+type FormulaInstallation struct {
+	ID         int64
+	FormulaID  string
+	Target     string
+	State      string
+	Version    string
+	Status     string
+	PillarJSON string
+	Error      string
+	AppliedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// SaveFormulaInstallation upserts the tracking row for a formula/target pair.
+func (d *DB) SaveFormulaInstallation(f FormulaInstallation) error {
+	now := time.Now()
+	if f.AppliedAt.IsZero() {
+		f.AppliedAt = now
+	}
+	_, err := d.sql.Exec(`
+INSERT INTO formula_installations
+  (formula_id,target,state,version,status,pillar_json,error,applied_at,updated_at)
+VALUES (?,?,?,?,?,?,?,?,?)
+ON CONFLICT(formula_id,target) DO UPDATE SET
+  state=excluded.state,
+  version=excluded.version,
+  status=excluded.status,
+  pillar_json=excluded.pillar_json,
+  error=excluded.error,
+  applied_at=excluded.applied_at,
+  updated_at=excluded.updated_at`,
+		f.FormulaID, f.Target, f.State, f.Version, f.Status, f.PillarJSON, f.Error, f.AppliedAt, now)
+	return err
+}
+
+// FormulaInstallations returns all tracked formula installations.
+func (d *DB) FormulaInstallations() ([]FormulaInstallation, error) {
+	rows, err := d.sql.Query(`
+SELECT id,formula_id,target,state,version,status,pillar_json,error,applied_at,updated_at
+FROM formula_installations ORDER BY formula_id, target`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FormulaInstallation
+	for rows.Next() {
+		var f FormulaInstallation
+		if err := rows.Scan(&f.ID, &f.FormulaID, &f.Target, &f.State, &f.Version, &f.Status,
+			&f.PillarJSON, &f.Error, &f.AppliedAt, &f.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// FormulaInstallation returns one tracking row, or nil if not installed.
+func (d *DB) FormulaInstallation(formulaID, target string) (*FormulaInstallation, error) {
+	var f FormulaInstallation
+	err := d.sql.QueryRow(`
+SELECT id,formula_id,target,state,version,status,pillar_json,error,applied_at,updated_at
+FROM formula_installations WHERE formula_id=? AND target=?`, formulaID, target).
+		Scan(&f.ID, &f.FormulaID, &f.Target, &f.State, &f.Version, &f.Status,
+			&f.PillarJSON, &f.Error, &f.AppliedAt, &f.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// BootstrapRun records one plan/apply execution.
+type BootstrapRun struct {
+	ID         int64
+	Host       string
+	Mode       string
+	Status     string
+	PlanJSON   string
+	Log        string
+	Error      string
+	StartedAt  time.Time
+	FinishedAt *time.Time
+}
+
+// SaveBootstrapRun inserts a run and returns its ID.
+func (d *DB) SaveBootstrapRun(r BootstrapRun) (int64, error) {
+	if r.StartedAt.IsZero() {
+		r.StartedAt = time.Now()
+	}
+	res, err := d.sql.Exec(`
+INSERT INTO bootstrap_runs (host,mode,status,plan_json,log,error,started_at,finished_at)
+VALUES (?,?,?,?,?,?,?,?)`,
+		r.Host, r.Mode, r.Status, r.PlanJSON, r.Log, r.Error, r.StartedAt, r.FinishedAt)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// UpdateBootstrapRun updates status/log/error and completion time.
+func (d *DB) UpdateBootstrapRun(id int64, status, log, errMsg string) error {
+	now := time.Now()
+	_, err := d.sql.Exec(`
+UPDATE bootstrap_runs SET status=?, log=?, error=?, finished_at=? WHERE id=?`,
+		status, log, errMsg, now, id)
+	return err
+}
+
+// BootstrapRuns returns recent runs, newest first.
+func (d *DB) BootstrapRuns(limit int) ([]BootstrapRun, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := d.sql.Query(`
+SELECT id,host,mode,status,plan_json,log,error,started_at,finished_at
+FROM bootstrap_runs ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BootstrapRun
+	for rows.Next() {
+		var r BootstrapRun
+		if err := rows.Scan(&r.ID, &r.Host, &r.Mode, &r.Status, &r.PlanJSON, &r.Log, &r.Error,
+			&r.StartedAt, &r.FinishedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// PlatformProfile is the cached view of a bootstrapped Proxmox platform.
+type PlatformProfile struct {
+	Host         string
+	SaltMasterID string
+	SaltAPIURL   string
+	SaltAPIUser  string
+	SaltVersion  string
+	Status       string
+	DetailsJSON  string
+	LastChecked  time.Time
+}
+
+// SavePlatformProfile upserts a platform profile.
+func (d *DB) SavePlatformProfile(p PlatformProfile) error {
+	if p.LastChecked.IsZero() {
+		p.LastChecked = time.Now()
+	}
+	_, err := d.sql.Exec(`
+INSERT INTO platform_profiles
+  (host,salt_master_id,salt_api_url,salt_api_user,salt_version,status,details_json,last_checked)
+VALUES (?,?,?,?,?,?,?,?)
+ON CONFLICT(host) DO UPDATE SET
+  salt_master_id=excluded.salt_master_id,
+  salt_api_url=excluded.salt_api_url,
+  salt_api_user=excluded.salt_api_user,
+  salt_version=excluded.salt_version,
+  status=excluded.status,
+  details_json=excluded.details_json,
+  last_checked=excluded.last_checked`,
+		p.Host, p.SaltMasterID, p.SaltAPIURL, p.SaltAPIUser, p.SaltVersion,
+		p.Status, p.DetailsJSON, p.LastChecked)
+	return err
+}
+
+// PlatformProfile returns the cached profile for host, or nil.
+func (d *DB) PlatformProfile(host string) (*PlatformProfile, error) {
+	var p PlatformProfile
+	err := d.sql.QueryRow(`
+SELECT host,salt_master_id,salt_api_url,salt_api_user,salt_version,status,details_json,last_checked
+FROM platform_profiles WHERE host=?`, host).
+		Scan(&p.Host, &p.SaltMasterID, &p.SaltAPIURL, &p.SaltAPIUser, &p.SaltVersion,
+			&p.Status, &p.DetailsJSON, &p.LastChecked)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
 }

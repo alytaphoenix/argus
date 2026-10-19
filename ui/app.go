@@ -24,6 +24,7 @@ const (
 	screenSalt
 	screenSaltDetail
 	screenOrchestrate
+	screenBootstrap
 	screenNomad
 	screenNomadDetail
 	screenProvision
@@ -72,6 +73,7 @@ type App struct {
 	salt           SaltModel
 	saltDetail     SaltDetailModel
 	orch           OrchestrateModel
+	bootstrap      BootstrapModel
 	nomad          NomadModel
 	nomadDetail    NomadDetailModel
 	provision      ProvisionModel
@@ -260,6 +262,7 @@ func (a App) sectionRoots() []screenID {
 		roots = append(roots, screenSalt)
 	}
 	roots = append(roots, screenOrchestrate)
+	roots = append(roots, screenBootstrap)
 	if a.nomadClient != nil {
 		roots = append(roots, screenNomad)
 	}
@@ -303,6 +306,8 @@ func (a App) screenCapturesTab() bool {
 		return a.orch.form != nil || a.orch.provisionForm != nil ||
 			a.orch.provisionConfirm != nil || a.orch.bsvcActionDialog != nil ||
 			a.orch.confirm != nil
+	case screenBootstrap:
+		return a.bootstrap.confirm || a.bootstrap.applying
 	case screenProvision:
 		// The whole provisioning screen is a multi-field form; tab always
 		// means "next field" here.
@@ -356,6 +361,11 @@ func (a App) switchSection(next screenID) (App, tea.Cmd) {
 			a.dnsClient, a.caClient, a.plexClient, a.client)
 		a.orch.width, a.orch.height = a.width, a.height
 		return a, a.orch.Init()
+	case screenBootstrap:
+		a.screen = screenBootstrap
+		a.bootstrap = NewBootstrapModel(a.client, a.saltClient, a.database, a.cfg, a.sshPassword)
+		a.bootstrap.width, a.bootstrap.height = a.width, a.height
+		return a, a.bootstrap.Init()
 	case screenNomad:
 		if a.nomadClient != nil {
 			a.screen = screenNomad
@@ -442,6 +452,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.salt.width, a.salt.height = msg.Width, msg.Height
 		a.saltDetail.width, a.saltDetail.height = msg.Width, msg.Height
 		a.orch.width, a.orch.height = msg.Width, msg.Height
+		a.bootstrap.width, a.bootstrap.height = msg.Width, msg.Height
 		a.nomad.width, a.nomad.height = msg.Width, msg.Height
 		a.nomadDetail.width, a.nomadDetail.height = msg.Width, msg.Height
 		a.provision.width, a.provision.height = msg.Width, msg.Height
@@ -673,7 +684,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case backMsg:
 		switch a.screen {
-		case screenGuests, screenSalt, screenOrchestrate, screenNomad, screenCredentials, screenProfiles,
+		case screenGuests, screenSalt, screenOrchestrate, screenBootstrap, screenNomad, screenCredentials, screenProfiles,
 			screenMetrics, screenServices, screenPXE, screenSecurity, screenSettings,
 			screenMaintenance, screenPlex, screenRunbooks, screenAlertRoutes, screenLifecycle:
 			a.screen = screenNodes
@@ -763,6 +774,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.saltDetail, cmd = a.saltDetail.Update(msg)
 	case screenOrchestrate:
 		a.orch, cmd = a.orch.Update(msg)
+	case screenBootstrap:
+		a.bootstrap, cmd = a.bootstrap.Update(msg)
 	case screenNomad:
 		a.nomad, cmd = a.nomad.Update(msg)
 	case screenNomadDetail:
@@ -819,6 +832,7 @@ func (a App) tabBar() string {
 		entries = append(entries, tabEntry{"Salt", screenSalt})
 	}
 	entries = append(entries, tabEntry{"Orch", screenOrchestrate})
+	entries = append(entries, tabEntry{"Bootstrap", screenBootstrap})
 	if a.nomadClient != nil {
 		entries = append(entries, tabEntry{"Nomad", screenNomad})
 	}
@@ -939,6 +953,13 @@ func (a App) helpLines() []string {
 			"?                 ask Claude for an explanation",
 			"tab / ↑↓          move between fields in a form",
 		)
+	case screenBootstrap:
+		lines = append(lines,
+			"x / r             inspect platform + registry",
+			"space             select formula",
+			"a / A             apply selected / baseline",
+			"f                 filter installable formulas",
+		)
 	case screenMaintenance:
 		lines = append(lines, "tabs               runs / schedules / configure", "r                 run selected schedule now")
 	case screenServices:
@@ -969,6 +990,8 @@ func (a App) View() string {
 		content = a.saltDetail.View()
 	case screenOrchestrate:
 		content = a.orch.View()
+	case screenBootstrap:
+		content = a.bootstrap.View()
 	case screenNomad:
 		content = a.nomad.View()
 	case screenNomadDetail:
@@ -1073,6 +1096,8 @@ func (a App) currentContext() string {
 		return fmt.Sprintf("Guest detail: %s (VMID %d, status: %s)", a.detail.guest.Name, a.detail.guest.VMID, a.detail.guest.Status)
 	case screenSalt:
 		return fmt.Sprintf("Salt minions: %d total", len(a.salt.minions))
+	case screenBootstrap:
+		return "Bootstrap: platform readiness and formula registry"
 	case screenNomad:
 		return fmt.Sprintf("Nomad jobs: %d total", len(a.nomad.jobs))
 	case screenMetrics:

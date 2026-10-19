@@ -27,6 +27,7 @@ const usage = `argus — Bubble Tea TUI for managing a Proxmox homelab
 Usage:
   argus              Launch the TUI (first-run setup runs automatically if unconfigured)
   argus config       Launch the interactive config editor
+  argus bootstrap    Inspect/apply the Salt platform bootstrap
   argus --version    Print the version
   argus --help       Show this help
 
@@ -44,6 +45,9 @@ func main() {
 			os.Exit(0)
 		case "config":
 			runConfigEditor()
+		case "bootstrap":
+			runBootstrap(os.Args[2:])
+			os.Exit(0)
 		default:
 			fmt.Fprintf(os.Stderr, "argus: unknown command %q\n\n%s\n", os.Args[1], usage)
 			os.Exit(2)

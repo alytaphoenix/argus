@@ -66,6 +66,25 @@ default bind is `127.0.0.1:9099`.
 - `/scrape-config` contains internal hostnames and placeholder credentials
   only; review it before sharing.
 
+## Salt master and formula registry
+
+The bootstrap installer runs Salt 3008.x from an isolated venv
+(`/opt/argus-salt/venv`), with systemd units `argus-salt-master`,
+`argus-salt-api`, and `argus-salt-minion`.
+
+- `salt-api` uses HTTPS with a certificate signed by the Proxmox CA and a
+  dedicated PAM user (`saltapi`), not the root password.
+- `netapi_enable_clients` is limited to `local`, `local_async`, `wheel`, and
+  `runner` — the clients argus needs.
+- External auth grants `saltapi` `.*`, `@wheel`, and `@runner`; this is a
+  privileged automation account. Protect the password in
+  `/etc/argus/salt-api-password` (0600) and the keychain copy.
+- The Salt API (`8000/tcp`) and minion ports (`4505/4506/tcp`) must be reachable
+  only from trusted management/minion networks. The reference firewall allows
+  the LAN and drops outside traffic.
+- Formula application is additive and tracked in SQLite. There is no automatic
+  rollback; review the plan and keep backups.
+
 ## MCP server and runbooks
 
 `argus-mcp-server` is a stdio server. Any local process that can launch it and

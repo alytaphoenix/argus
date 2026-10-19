@@ -6,6 +6,24 @@ There are two deployment targets:
 2. A Proxmox VE host running the optional metrics exporter, and possibly the
    TUI over SSH.
 
+## Platform bootstrap (Salt + formulas)
+
+After the binaries are installed, `argus bootstrap` can install the host-side
+platform layer:
+
+```bash
+argus bootstrap plan                 # read-only inspection
+argus bootstrap apply --dry-run      # same, explicit
+argus bootstrap apply --yes          # install/update Salt + baseline
+argus bootstrap apply --yes --formulas base,docker,node-exporter
+```
+
+This installs Salt 3008.x in `/opt/argus-salt/venv`, systemd units
+`argus-salt-master`/`argus-salt-api`/`argus-salt-minion`, a PVE-CA-signed API
+certificate, and the formula registry under `/srv/salt/argus`. It records
+platform state, formula installations, and runs in SQLite and writes `[salt]`
+to the argus config. See [bootstrap](bootstrap.md).
+
 ## Workstation
 
 ```bash

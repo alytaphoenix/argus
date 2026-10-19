@@ -35,6 +35,9 @@ integrations except Proxmox are optional.
   maintenance.
 - **Salt orchestration:** minion keys, pending VM applies, cluster pillar,
   guided Bootstrap, and service wiring.
+- **Platform bootstrap and formula registry:** inspects a Proxmox host, installs
+  an isolated Salt master/API, and tracks an opinionated set of Salt formulas
+  with apply/drift status.
 - **Bootstrap:** checks DNS, certificates, TrueNAS, Plex, Servarr, Hermes, and
   Signal; inventories existing guests before proposing anything; never
   reprovisions an existing VM automatically.
@@ -86,6 +89,8 @@ argus --version
 ## Documentation
 
 - [Documentation index](docs/README.md) — start here.
+- [Bootstrap and formulas](docs/bootstrap.md) — platform bootstrap, Salt runtime,
+  opinionated formula registry.
 - [Configuration](docs/configuration.md) — auth, secrets, env vars, sections.
 - [Deployment](docs/deployment.md) — workstation, Proxmox host, systemd,
   upgrades.

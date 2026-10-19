@@ -31,6 +31,14 @@ domain      = ""             # homelab domain suffix, e.g. "homelab.local"
 timezone    = "UTC"          # IANA timezone for log display (e.g. "America/New_York")
 admin_email = ""             # operator email for cert SANs / notifications
 
+# Platform bootstrap — optional; `argus bootstrap` uses these defaults.
+[bootstrap]
+ssh_user       = "root"      # SSH user on the Proxmox host (root is required for first bootstrap)
+ssh_key        = ""          # falls back to [globals] ssh_key / ssh-agent
+salt_master_id = ""          # minion ID for the Proxmox host (default: node name)
+salt_api_url   = ""          # default: https://<proxmox-host>:8000
+salt_api_user  = "saltapi"   # PAM user for salt-api
+
 # Salt — optional; omit to disable the minions screen (m)
 # master_minion: the minion ID of your salt-master host (usually its hostname).
 # Required for 'w' (service wiring) in the Services screen — argus writes pillar

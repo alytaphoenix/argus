@@ -17,6 +17,7 @@ type Config struct {
 	Password      string              `toml:"password"`
 	Insecure      bool                `toml:"insecure"`
 	Globals       GlobalsConfig       `toml:"globals"`
+	Bootstrap     BootstrapConfig     `toml:"bootstrap"`
 	Salt          SaltConfig          `toml:"salt"`
 	Nomad         NomadConfig         `toml:"nomad"`
 	Defaults      DefaultsConfig      `toml:"defaults"`
@@ -86,6 +87,15 @@ type GlobalsConfig struct {
 
 	// AdminEmail is the operator contact address for notifications / CA certs.
 	AdminEmail string `toml:"admin_email"`
+}
+
+// BootstrapConfig configures the first-run platform bootstrap.
+type BootstrapConfig struct {
+	SSHUser      string `toml:"ssh_user"`       // SSH user for the Proxmox host (default root)
+	SSHKey       string `toml:"ssh_key"`        // private key path; falls back to [globals] ssh_key
+	SaltMasterID string `toml:"salt_master_id"` // minion ID for the Salt master (default: node name)
+	SaltAPIURL   string `toml:"salt_api_url"`   // default https://<host>:8000
+	SaltAPIUser  string `toml:"salt_api_user"`  // PAM user for salt-api (default saltapi)
 }
 
 // MatchboxConfig configures the Matchbox PXE provisioning server.
@@ -323,6 +333,21 @@ func Load() (*Config, error) {
 	if v := envAny("ARGUS_TIMEZONE", "RATATASKR_TIMEZONE"); v != "" {
 		cfg.Globals.Timezone = v
 	}
+	if v := os.Getenv("ARGUS_BOOTSTRAP_SSH_USER"); v != "" {
+		cfg.Bootstrap.SSHUser = v
+	}
+	if v := os.Getenv("ARGUS_BOOTSTRAP_SSH_KEY"); v != "" {
+		cfg.Bootstrap.SSHKey = v
+	}
+	if v := os.Getenv("ARGUS_BOOTSTRAP_SALT_MASTER_ID"); v != "" {
+		cfg.Bootstrap.SaltMasterID = v
+	}
+	if v := os.Getenv("ARGUS_BOOTSTRAP_SALT_API_URL"); v != "" {
+		cfg.Bootstrap.SaltAPIURL = v
+	}
+	if v := os.Getenv("ARGUS_BOOTSTRAP_SALT_API_USER"); v != "" {
+		cfg.Bootstrap.SaltAPIUser = v
+	}
 
 	// Apply globals → propagate to sub-sections if not already set.
 	cfg.ApplyGlobals()
@@ -384,6 +409,18 @@ func (cfg *Config) ApplyGlobals() {
 	// Default timezone
 	if g.Timezone == "" {
 		g.Timezone = "UTC"
+	}
+
+	// Bootstrap defaults. The Proxmox host normally uses root over SSH, and
+	// salt-api uses a dedicated PAM user.
+	if cfg.Bootstrap.SSHUser == "" {
+		cfg.Bootstrap.SSHUser = "root"
+	}
+	if cfg.Bootstrap.SSHKey == "" {
+		cfg.Bootstrap.SSHKey = g.SSHKey
+	}
+	if cfg.Bootstrap.SaltAPIUser == "" {
+		cfg.Bootstrap.SaltAPIUser = "saltapi"
 	}
 }
 

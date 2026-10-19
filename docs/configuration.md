@@ -80,6 +80,9 @@ preferred; legacy `RATATASKR_*` names are still accepted.
 | Proxmox host | `PROXMOX_HOST` |
 | Proxmox token id / secret | `PROXMOX_TOKEN_ID` / `PROXMOX_SECRET` |
 | Proxmox username / password | `PROXMOX_USERNAME` / `PROXMOX_PASSWORD` |
+| Bootstrap SSH user/key | `ARGUS_BOOTSTRAP_SSH_USER` / `ARGUS_BOOTSTRAP_SSH_KEY` |
+| Bootstrap Salt master/API | `ARGUS_BOOTSTRAP_SALT_MASTER_ID` / `ARGUS_BOOTSTRAP_SALT_API_URL` |
+| Bootstrap Salt API user | `ARGUS_BOOTSTRAP_SALT_API_USER` |
 | Salt URL / user / password | `SALT_URL` / `SALT_USERNAME` / `SALT_PASSWORD` |
 | Nomad URL / token | `NOMAD_URL` / `NOMAD_TOKEN` |
 | Prometheus URL / token | `PROMETHEUS_URL` / `PROMETHEUS_TOKEN` |
@@ -101,6 +104,7 @@ Only Proxmox is required. Omit any other section to disable that integration.
 | Section | What it configures |
 | --- | --- |
 | `[globals]` | SSH user/key, domain, timezone, admin email. |
+| `[bootstrap]` | SSH target/key, Salt master ID, salt-api URL/user for `argus bootstrap`. |
 | `[defaults]` | Cloud-init VM defaults (template, CPU, memory, disk, storage, bridge, CI user/key/IP, nameserver, search domain, backup storage). |
 | `[salt]` | salt-api URL, credentials, eauth, master minion, pillar/state roots. Requires `salt-api` with CherryPy. |
 | `[nomad]` | Nomad URL and optional ACL token. |
@@ -127,6 +131,22 @@ CA root's SHA-256; argus verifies and pins it before using TLS.
 
 Wazuh verifies TLS by default; set `insecure = true` only if it uses a
 self-signed certificate that you cannot trust another way.
+
+## Bootstrap
+
+```toml
+[bootstrap]
+ssh_user       = "root"
+ssh_key        = "~/.ssh/argus_bootstrap"
+salt_master_id = "proxmox"
+salt_api_url   = "https://pve.example.com:8000"
+salt_api_user  = "saltapi"
+```
+
+`argus bootstrap apply` installs an isolated Salt 3008.x runtime, writes the
+resulting `[salt]` configuration, and stores the API password in the keychain
+(`salt_password`). See [bootstrap](bootstrap.md) for the full workflow and the
+formula registry.
 
 ## Metrics listener
 

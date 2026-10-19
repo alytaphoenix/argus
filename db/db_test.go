@@ -1283,3 +1283,58 @@ func containsStr(s, sub string) bool {
 	}
 	return false
 }
+
+func TestBootstrapTracking(t *testing.T) {
+	d := openTestDB(t)
+
+	if err := d.SaveFormulaInstallation(FormulaInstallation{
+		FormulaID: "base", Target: "proxmox", State: "argus.base",
+		Version: "1.0.0", Status: "applied", AppliedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.FormulaInstallation("base", "proxmox")
+	if err != nil || got == nil {
+		t.Fatalf("FormulaInstallation: %v %v", got, err)
+	}
+	if got.Status != "applied" {
+		t.Fatalf("status = %q", got.Status)
+	}
+	if err := d.SaveFormulaInstallation(FormulaInstallation{
+		FormulaID: "base", Target: "proxmox", State: "argus.base",
+		Version: "1.0.0", Status: "failed", Error: "boom", AppliedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = d.FormulaInstallation("base", "proxmox")
+	if got.Status != "failed" || got.Error != "boom" {
+		t.Fatalf("upsert = %+v", got)
+	}
+	rows, err := d.FormulaInstallations()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("FormulaInstallations = %v, %v", rows, err)
+	}
+
+	runID, err := d.SaveBootstrapRun(BootstrapRun{Host: "pve", Mode: "apply", Status: "running"})
+	if err != nil || runID == 0 {
+		t.Fatalf("SaveBootstrapRun = %d, %v", runID, err)
+	}
+	if err := d.UpdateBootstrapRun(runID, "success", "ok", ""); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := d.BootstrapRuns(5)
+	if err != nil || len(runs) != 1 || runs[0].Status != "success" {
+		t.Fatalf("BootstrapRuns = %+v, %v", runs, err)
+	}
+
+	if err := d.SavePlatformProfile(PlatformProfile{
+		Host: "pve", SaltMasterID: "proxmox", SaltAPIURL: "https://pve:8000",
+		SaltAPIUser: "saltapi", SaltVersion: "3008.3", Status: "ready",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prof, err := d.PlatformProfile("pve")
+	if err != nil || prof == nil || prof.SaltMasterID != "proxmox" {
+		t.Fatalf("PlatformProfile = %+v, %v", prof, err)
+	}
+}

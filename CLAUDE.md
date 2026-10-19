@@ -50,19 +50,20 @@ Bubble Tea TUI for managing a Proxmox homelab. Integrates Proxmox, Salt, Nomad, 
 1. `Proxmox` — nodes list + resource utilization badges
 2. `Salt` — minion list + state apply (optional; omit [salt] config to hide)
 3. `Orch` — Salt orchestrator: key acceptance, pending VM salt apply, cluster pillar management, Bootstrap tab with live service checks + provision/ingest actions (optional; requires [salt] config)
-4. `Nomad` — job list + allocations (optional; omit [nomad] config to hide)
-5. `Profiles` — cloud-init VM templates + salt profiles (each may carry `pillar_yaml` written to master before state.apply)
-6. `Metrics` — Prometheus + DB-backed resource history + Loki log browser tab
-7. `Services` — DNS/CA/TrueNAS/HA/health checks/service registry (5 tabs)
-8. `PXE` — Matchbox profiles, groups, spawn wizard
-9. `Security` — CrowdSec decisions + Wazuh agents/alerts + TCP port scan
-10. `Maintenance` — scheduled cluster-wide OS/Proxmox updates with HA awareness
-11. `Plex` — Plex Media Server + Servarr companion services checklist
-12. `Runbooks` — user-defined salt/shell step sequences with run history
-13. `Alerts` — alert routing rules (CrowdSec/Wazuh events → webhooks)
-14. `Lifecycle` — VM lifecycle policies (stop/snapshot long-running tagged VMs)
-15. `Settings` — DB-backed configurable thresholds and timeouts
-16. `Keys` — OS keychain credential manager
+4. `Bootstrap` — platform readiness + opinionated Salt formula registry; `x` inspect, space select, `a` apply selected, `A` baseline, `f` filter
+5. `Nomad` — job list + allocations (optional; omit [nomad] config to hide)
+6. `Profiles` — cloud-init VM templates + salt profiles (each may carry `pillar_yaml` written to master before state.apply)
+7. `Metrics` — Prometheus + DB-backed resource history + Loki log browser tab
+8. `Services` — DNS/CA/TrueNAS/HA/health checks/service registry (5 tabs)
+9. `PXE` — Matchbox profiles, groups, spawn wizard
+10. `Security` — CrowdSec decisions + Wazuh agents/alerts + TCP port scan
+11. `Maintenance` — scheduled cluster-wide OS/Proxmox updates with HA awareness
+12. `Plex` — Plex Media Server + Servarr companion services checklist
+13. `Runbooks` — user-defined salt/shell step sequences with run history
+14. `Alerts` — alert routing rules (CrowdSec/Wazuh events → webhooks)
+15. `Lifecycle` — VM lifecycle policies (stop/snapshot long-running tagged VMs)
+16. `Settings` — DB-backed configurable thresholds and timeouts
+17. `Keys` — OS keychain credential manager
 
 Scheduled maintenance runs and due schedules are fired by a once-a-minute
 scheduler tick in `ui/app.go` (`schedulerTickCmd` → `runDueSchedulesCmd`),
@@ -70,6 +71,8 @@ independent of which screen is open.
 
 **Packages:**
 
+- `bootstrap/` — Salt installer, platform planner, formula file materialization, SSH runner.
+- `formula/` — opinionated Salt formula registry, dependency resolver, built-in SLS catalog.
 - `config/` — loads `~/.config/argus/config.toml` or env vars. `[salt]`, `[nomad]`, `[plex]`, `[servarr.*]`, `[homeassistant]`, `[loki]` are optional; omitting them disables those screens/features.
 - `api/client.go` — Proxmox HTTP client, response unwrapper (`{"data": ...}`). Two auth modes: `PVEAPIToken` header (token_id/secret) or PVE ticket auth (username/password → `PVEAuthCookie` + `CSRFPreventionToken` on writes, re-login before the 2h ticket expiry). Username set = ticket auth wins.
 - `api/proxmox.go` — `Nodes`, `Guests` (merges qemu+lxc sorted by VMID), `GuestAction`, `GuestStatus`, `NodeVersion`, `Snapshots`, `CreateSnapshot`, `DeleteSnapshot`, `HAResources`, `MigrateHAResourcesOffNode`, `NodeAPTUpdate`, `WaitForTask`, `NodeReboot`.
@@ -98,7 +101,9 @@ independent of which screen is open.
 - `ui/services_truenas.go` — TrueNAS tab (pools, alerts, services).
 - `ui/services_ha.go` — Home Assistant tab (entity list, lazy-loaded on first visit).
 - `ui/orchestrate.go` — Salt orchestrator screen (4 tabs: Keys/Pending/Pillar/Bootstrap). Keys tab: live pending key queue from wheel API, `a`=accept, `r`=reject (both require confirmation). Pending tab: provisioned VMs with `salt_profile` but no `salt_applied_at`; `s`=apply states now. Pillar tab: cluster_pillar CRUD, `t`=sync TrueNAS datasets, `p`=push YAML to `<pillar_base>/argus_cluster.sls`, `n`=new manual entry, `d`=delete. Bootstrap tab: live service check grid for DNS/certs/TrueNAS/Plex/Servarr/Hermes/Signal; `x`=check all, `enter`=action dialog (wire up existing / provision missing via Salt / reprovision partial), `s`=skip. Provision prompts for target minion + Salt state, then runs `state.apply` and re-checks. Wire-up ingests service config into cluster_pillar and service_hosts. Key acceptance auto-applies the matched salt profile: writes per-profile pillar then applies each comma-separated state sequentially, polling for completion.
-- `db/db.go` — SQLite WAL mode. Migrations run as sequential `CREATE TABLE IF NOT EXISTS` / `ALTER` blocks at open (not strictly version-ordered in source); the destructive v16 certificates rebuild is guarded by `PRAGMA user_version`. Tables: `cloud_init_profiles`, `salt_profiles` (+ v17 `pillar_yaml` column), `provisioned_vms`, `salt_apply_events`, `nomad_job_snapshots`, `nomad_job_events`, `services`, `service_health_checks`, `certificates`, `dns_records_cache`, `vm_resize_events`, `pxe_profiles`, `pxe_groups`, `pxe_boot_events`, `security_events`, `service_hosts`, `node_ssh_credentials`, `scan_results`, `app_settings`, `node_metrics_history`, `service_uptime_events`, `runbooks`, `runbook_runs`, `alert_routes`, `vm_lifecycle_policies`, `maintenance_schedules`, `maintenance_runs`, `maintenance_run_steps`, `cluster_pillar` (v17: key, value, source, updated_at).
+- `bootstrap/` — `SaltInstallScript` (isolated venv, systemd, PVE-CA TLS), `Manager.Plan`/`Apply`, formula file rendering, SSH runner.
+- `formula/` — built-in catalog (`base`, `salt-minion`, `docker`, `node-exporter`, `technitium`, `traefik`, `uptime-kuma`) plus integration entries; dependency resolution and state naming.
+- `db/db.go` — SQLite WAL mode. Migrations run as sequential `CREATE TABLE IF NOT EXISTS` / `ALTER` blocks at open (not strictly version-ordered in source); the destructive v16 certificates rebuild is guarded by `PRAGMA user_version`. Tables: `cloud_init_profiles`, `salt_profiles` (+ v17 `pillar_yaml` column), `provisioned_vms`, `salt_apply_events`, `nomad_job_snapshots`, `nomad_job_events`, `services`, `service_health_checks`, `certificates`, `dns_records_cache`, `vm_resize_events`, `pxe_profiles`, `pxe_groups`, `pxe_boot_events`, `security_events`, `service_hosts`, `node_ssh_credentials`, `scan_results`, `app_settings`, `node_metrics_history`, `service_uptime_events`, `runbooks`, `runbook_runs`, `alert_routes`, `vm_lifecycle_policies`, `maintenance_schedules`, `maintenance_runs`, `maintenance_run_steps`, `cluster_pillar` (v17: key, value, source, updated_at), `platform_profiles`, `formula_installations`, `bootstrap_runs` (v18).
 - `keyring/` — OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager) via `github.com/zalando/go-keyring`. Keys: `proxmox_secret`, `proxmox_password`, `salt_password`, `nomad_token`, `ssh_password`, `wazuh_password`, `crowdsec_api_key`, `matchbox_token`, `technitium_token`, `prometheus_token`, `anthropic_api_key`, `truenas_api_key`, `plex_token`, `homeassistant_token`, `loki_token`, `hermes_api_key`.
 - `cmd/mcp-server/` — MCP stdio server exposing all integrations as tools for Claude/Hermes agents. Build separately with `go build ./cmd/mcp-server/`. Register with `claude mcp add argus -- /path/to/argus-mcp-server`.
 
@@ -211,3 +216,5 @@ Key test files:
 - `api/stepca_test.go` — step-ca root fingerprint pinning
 - `cmd/metrics-server/main_test.go` — scrape target formatting
 - `cmd/mcp-server/main_test.go` — helper functions and tool catalogue tests
+- `bootstrap/bootstrap_test.go` — Salt install script, formula files, SSH argv
+- `formula/formula_test.go` — registry validation, dependency order, state names
