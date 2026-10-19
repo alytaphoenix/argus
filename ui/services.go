@@ -185,9 +185,6 @@ type ServicesModel struct {
 	// Salt wiring
 	saltClient   *api.SaltClient
 	masterMinion string
-	pillarBase   string
-	stateBase    string
-	domain       string
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -230,15 +227,6 @@ func NewServicesModel(dnsClient *api.TechnitiumClient, caClient *api.StepCAClien
 	}
 	dnsFields[dnsFieldTTL].SetValue("300")
 
-	pillarBase := cfg.Salt.PillarBase
-	if pillarBase == "" {
-		pillarBase = "/srv/pillar"
-	}
-	stateBase := cfg.Salt.StateBase
-	if stateBase == "" {
-		stateBase = "/srv/salt"
-	}
-
 	return ServicesModel{
 		dnsClient:     dnsClient,
 		caClient:      caClient,
@@ -262,9 +250,6 @@ func NewServicesModel(dnsClient *api.TechnitiumClient, caClient *api.StepCAClien
 		}(),
 		saltClient:   saltClient,
 		masterMinion: cfg.Salt.MasterMinion,
-		pillarBase:   pillarBase,
-		stateBase:    stateBase,
-		domain:       cfg.Globals.Domain,
 	}
 }
 

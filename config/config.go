@@ -24,6 +24,7 @@ type Config struct {
 	Prometheus    PrometheusConfig    `toml:"prometheus"`
 	Technitium    TechnitiumConfig    `toml:"technitium"`
 	StepCA        StepCAConfig        `toml:"stepca"`
+	Traefik       TraefikConfig       `toml:"traefik"`
 	TrueNAS       TrueNASConfig       `toml:"truenas"`
 	Claude        ClaudeConfig        `toml:"claude"`
 	Matchbox      MatchboxConfig      `toml:"matchbox"`
@@ -141,8 +142,29 @@ type TechnitiumConfig struct {
 
 // StepCAConfig configures the Smallstep step-ca integration.
 type StepCAConfig struct {
-	URL         string `toml:"url"`         // e.g. https://ca.local:8443
-	Fingerprint string `toml:"fingerprint"` // root cert fingerprint for verification
+	URL             string `toml:"url"`              // e.g. https://ca.local:8443
+	Fingerprint     string `toml:"fingerprint"`      // root cert fingerprint for verification
+	ACMEProvisioner string `toml:"acme_provisioner"` // ACME provisioner name (default acme)
+	ACMEURL         string `toml:"acme_url"`         // explicit ACME directory URL
+}
+
+// ACMEEndpoint returns the step-ca ACME directory URL, or "" when ACME is not
+// configured. The default is <url>/acme/<provisioner>/directory.
+func (c StepCAConfig) ACMEEndpoint() string {
+	if c.ACMEURL != "" {
+		return strings.TrimSpace(c.ACMEURL)
+	}
+	if c.URL == "" || c.ACMEProvisioner == "" {
+		return ""
+	}
+	return strings.TrimRight(c.URL, "/") + "/acme/" + c.ACMEProvisioner + "/directory"
+}
+
+// TraefikConfig configures the ingress used for automatic service DNS/TLS.
+type TraefikConfig struct {
+	// IngressIP is the address clients and step-ca use to reach Traefik.
+	// Defaults to the Proxmox host when empty.
+	IngressIP string `toml:"ingress_ip"`
 }
 
 // HomeAssistantConfig configures the Home Assistant integration.
@@ -289,6 +311,15 @@ func Load() (*Config, error) {
 	if v := os.Getenv("STEPCA_URL"); v != "" {
 		cfg.StepCA.URL = v
 	}
+	if v := os.Getenv("STEPCA_ACME_PROVISIONER"); v != "" {
+		cfg.StepCA.ACMEProvisioner = v
+	}
+	if v := os.Getenv("STEPCA_ACME_URL"); v != "" {
+		cfg.StepCA.ACMEURL = v
+	}
+	if v := os.Getenv("TRAEFIK_INGRESS_IP"); v != "" {
+		cfg.Traefik.IngressIP = v
+	}
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.Claude.APIKey = v
 	}
@@ -409,6 +440,14 @@ func (cfg *Config) ApplyGlobals() {
 	// Default timezone
 	if g.Timezone == "" {
 		g.Timezone = "UTC"
+	}
+
+	// step-ca ACME is the default certificate path once a CA URL is present.
+	// The conventional provisioner created by `step ca provisioner add acme`
+	// is named "acme"; an explicit empty value is impossible to distinguish
+	// from an unset one in TOML, so default it here.
+	if cfg.StepCA.URL != "" && cfg.StepCA.ACMEProvisioner == "" {
+		cfg.StepCA.ACMEProvisioner = "acme"
 	}
 
 	// Bootstrap defaults. The Proxmox host normally uses root over SSH, and

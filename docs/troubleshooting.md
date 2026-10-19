@@ -85,6 +85,28 @@ section to `config.toml` (or `argus config`), store the secret in the keychain,
 then press `x` to re-check. Salt must be configured before Salt-based
 provisioning can work.
 
+## Services have no DNS record or certificate
+
+Automatic wiring needs all of the following:
+
+- `[globals] domain` set to the Technitium zone.
+- `[technitium] url` plus a token in the Keychain (`technitium_token`).
+- `[salt] master_minion` pointing at the host that runs Traefik.
+- `[traefik] ingress_ip` (or a Proxmox host URL that resolves to the ingress).
+- For certificates, `[stepca]` configured with an ACME provisioner.
+
+Press `w` on the Services screen to force a refresh. On the Salt master, check:
+
+```bash
+ls -l /etc/argus/technitium.token /etc/traefik/dynamic
+cat /etc/traefik/traefik.yml
+docker logs --tail=100 traefik
+```
+
+The ACME HTTP-01 challenge requires the CA to reach Traefik on port 80. If
+Traefik is running from an older formula, re-apply it so the container gets the
+`--configFile` flag and the `/etc/traefik` mount.
+
 ## Bootstrap found my VMs but does not manage them
 
 Discovery lists every Proxmox guest and marks only VMs recorded in

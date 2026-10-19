@@ -14,6 +14,7 @@ import (
 	"github.com/alytaphoenix/argus/api"
 	"github.com/alytaphoenix/argus/config"
 	"github.com/alytaphoenix/argus/db"
+	"github.com/alytaphoenix/argus/wiring"
 )
 
 const (
@@ -34,10 +35,12 @@ const (
 )
 
 type ProvisionModel struct {
-	client   *api.Client
-	node     api.Node
-	defaults config.DefaultsConfig
-	database *db.DB
+	client    *api.Client
+	node      api.Node
+	defaults  config.DefaultsConfig
+	database  *db.DB
+	dnsClient *api.TechnitiumClient
+	domain    string
 
 	inputs  []textinput.Model
 	focused int
@@ -47,13 +50,15 @@ type ProvisionModel struct {
 
 	submitting bool
 	taskID     string
+	warnings   []string
 	err        error
 	width      int
 	height     int
 	spinner    spinner.Model
 }
 
-func NewProvisionModel(client *api.Client, node api.Node, defaults config.DefaultsConfig, database *db.DB) ProvisionModel {
+func NewProvisionModel(client *api.Client, node api.Node, defaults config.DefaultsConfig,
+	database *db.DB, dnsClient *api.TechnitiumClient, domain string) ProvisionModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 
@@ -102,12 +107,14 @@ func NewProvisionModel(client *api.Client, node api.Node, defaults config.Defaul
 	inputs[provFieldTemplate].Focus()
 
 	return ProvisionModel{
-		client:   client,
-		node:     node,
-		defaults: defaults,
-		database: database,
-		inputs:   inputs,
-		spinner:  s,
+		client:    client,
+		node:      node,
+		defaults:  defaults,
+		database:  database,
+		dnsClient: dnsClient,
+		domain:    domain,
+		inputs:    inputs,
+		spinner:   s,
 	}
 }
 
@@ -191,6 +198,8 @@ func (m ProvisionModel) submit() tea.Cmd {
 	client := m.client
 	node := m.node
 	database := m.database
+	dnsClient := m.dnsClient
+	domain := m.domain
 
 	templateID, _ := strconv.Atoi(m.inputs[provFieldTemplate].Value())
 	name := strings.TrimSpace(m.inputs[provFieldName].Value())
@@ -226,6 +235,7 @@ func (m ProvisionModel) submit() tea.Cmd {
 
 		var lastTaskID string
 		var lastVMID int
+		var warnings []string
 
 		for i := 0; i < batchCount; i++ {
 			vmName := name
@@ -304,11 +314,61 @@ func (m ProvisionModel) submit() tea.Cmd {
 				})
 			}
 
+			// Give the guest a chance to boot and report an IP through the
+			// QEMU guest agent, then publish <vm-name>.<domain> in Technitium.
+			// This is best-effort: a missing agent or DNS outage must not make
+			// the clone itself look like a failure.
+			if dnsClient != nil && domain != "" && client != nil {
+				label := wiring.DNSLabel(vmName)
+				if label == "" {
+					warnings = append(warnings, fmt.Sprintf("%s: could not derive a DNS label", vmName))
+				} else {
+					ip := waitForGuestIP(ctx, client, node.Name, "qemu", newVMID, 90*time.Second)
+					if ip == "" {
+						warnings = append(warnings, fmt.Sprintf("%s: guest agent did not report an IP; DNS record not created", vmName))
+					} else {
+						dnsCtx, dnsCancel := context.WithTimeout(ctx, 15*time.Second)
+						err := dnsClient.AddRecord(dnsCtx, api.DNSAddOptions{
+							Zone:      domain,
+							Domain:    label + "." + domain,
+							Type:      "A",
+							IPAddress: ip,
+							Overwrite: true,
+						})
+						dnsCancel()
+						if err != nil {
+							warnings = append(warnings, fmt.Sprintf("%s: DNS record %s.%s failed: %v", vmName, label, domain, err))
+						} else if database != nil {
+							_ = database.UpdateVMStatus(newVMID, "running", ip, "qemu")
+						}
+					}
+				}
+			}
+
 			lastTaskID = taskID
 			lastVMID = newVMID
 		}
 
-		return provisionDoneMsg{taskID: lastTaskID, vmid: lastVMID, count: batchCount}
+		return provisionDoneMsg{taskID: lastTaskID, vmid: lastVMID, count: batchCount, warnings: warnings}
+	}
+}
+
+// waitForGuestIP polls the QEMU guest agent until it reports an IPv4 address
+// or the timeout expires. Returns "" when no address becomes available.
+func waitForGuestIP(ctx context.Context, client *api.Client, node, guestType string, vmid int, timeout time.Duration) string {
+	deadline := time.Now().Add(timeout)
+	for {
+		if ip := client.GuestPrimaryIP(ctx, node, guestType, vmid); ip != "" {
+			return ip
+		}
+		if time.Now().After(deadline) {
+			return ""
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(5 * time.Second):
+		}
 	}
 }
 
@@ -317,6 +377,7 @@ func (m ProvisionModel) Update(msg tea.Msg) (ProvisionModel, tea.Cmd) {
 	case provisionDoneMsg:
 		m.submitting = false
 		m.err = msg.err
+		m.warnings = msg.warnings
 		if msg.err == nil {
 			if msg.count > 1 {
 				m.taskID = fmt.Sprintf("%d VMs cloned, last: %d — task %s", msg.count, msg.vmid, msg.taskID)
@@ -432,6 +493,12 @@ func (m ProvisionModel) View() string {
 		sb.WriteString(styleError.Render("  error: "+m.err.Error()) + "\n\n")
 	} else if m.taskID != "" {
 		sb.WriteString(styleRunning.Render("  ✓ "+m.taskID) + "\n\n")
+	}
+	for _, warning := range m.warnings {
+		sb.WriteString(styleError.Render("  ! "+warning) + "\n")
+	}
+	if len(m.warnings) > 0 {
+		sb.WriteString("\n")
 	}
 
 	sb.WriteString(styleDim.Render("  "+strings.Repeat("─", max(m.width-4, 50))) + "\n")

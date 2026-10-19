@@ -4,6 +4,42 @@ All notable changes to argus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-19
+
+### Added
+
+- Automatic service wiring: enabled services in the Services registry now get
+  a Technitium DNS record and, for HTTP/HTTPS services, a Traefik route without
+  pressing `w`. Wiring refreshes after add/delete and after a provisioned node's
+  Salt profile is applied.
+- Automatic TLS through a step-ca ACME resolver. Traefik obtains and renews
+  certificates for service names when `[stepca]` is configured; non-ACME setups
+  fall back to Traefik's self-signed certificate.
+- `[traefik] ingress_ip` and `[stepca] acme_provisioner` / `acme_url` settings,
+  including environment overrides.
+- Provisioning creates `<vm-name>.<domain>` once the QEMU guest agent reports
+  an IP, records the IP in `provisioned_vms`, and shows a warning when DNS could
+  not be created.
+- `wiring/` package with tests for pillar generation, DNS record type selection,
+  static Traefik config, and config defaults.
+
+### Changed
+
+- The Traefik formula now runs from `/etc/traefik/traefik.yml`, mounts
+  `/etc/traefik` into the container, and enables the file provider. Re-apply the
+  `traefik` formula on existing hosts.
+- The Technitium token is written to `/etc/argus/technitium.token` with mode
+  `0600`; the generated pillar is also `0600` and contains no tokens.
+- Service wiring removes stale `*.yml` routes from `/etc/traefik/dynamic` when a
+  service is deleted.
+
+### Fixed
+
+- Service wiring previously hard-coded `cert: false` and required a manual `w`
+  press, so services never received certificates.
+- Traefik dynamic configuration was written to a directory the container did not
+  mount, so routes were not loaded.
+
 ## [0.2.0] - 2026-10-19
 
 ### Added

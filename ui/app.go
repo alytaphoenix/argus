@@ -542,7 +542,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case openProvisionMsg:
 		a.screen = screenProvision
-		a.provision = NewProvisionModel(a.client, msg.node, a.defaults, a.database)
+		a.provision = NewProvisionModel(a.client, msg.node, a.defaults, a.database, a.dnsClient, a.cfg.Globals.Domain)
 		a.provision.width, a.provision.height = a.width, a.height
 		return a, a.provision.Init()
 

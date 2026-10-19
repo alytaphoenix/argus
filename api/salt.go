@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"path"
 	"regexp"
@@ -244,6 +245,12 @@ func (c *SaltClient) Minions(ctx context.Context) ([]Minion, error) {
 // ApplyState dispatches state.apply asynchronously and returns the JID.
 // Pass an empty state to run highstate.
 func (c *SaltClient) ApplyState(ctx context.Context, target, state string) (string, error) {
+	return c.ApplyStateWithPillar(ctx, target, state, nil)
+}
+
+// ApplyStateWithPillar applies a state with an inline pillar override. This
+// avoids requiring a generated pillar file to be listed in /srv/pillar/top.sls.
+func (c *SaltClient) ApplyStateWithPillar(ctx context.Context, target, state string, pillar map[string]interface{}) (string, error) {
 	cmd := map[string]interface{}{
 		"client": "local_async",
 		"tgt":    target,
@@ -251,6 +258,9 @@ func (c *SaltClient) ApplyState(ctx context.Context, target, state string) (stri
 	}
 	if state != "" {
 		cmd["arg"] = []string{state}
+	}
+	if len(pillar) > 0 {
+		cmd["kwarg"] = map[string]interface{}{"pillar": pillar}
 	}
 	raw, err := c.saltRun(ctx, cmd)
 	if err != nil {
@@ -509,6 +519,12 @@ func (c *SaltClient) WritePillar(ctx context.Context, masterMinion, pillarBase, 
 // masterMinion must be a minion whose grain id matches the salt-master host.
 // The path must be absolute; its parent directory is created with mkdir -p.
 func (c *SaltClient) WriteFile(ctx context.Context, masterMinion, filePath, content string) error {
+	return c.WriteFileMode(ctx, masterMinion, filePath, content, 0o644)
+}
+
+// WriteFileMode writes a file on the master minion and enforces its mode.
+// Use 0600 for pillars or token files that must not be world-readable.
+func (c *SaltClient) WriteFileMode(ctx context.Context, masterMinion, filePath, content string, mode fs.FileMode) error {
 	if strings.ContainsAny(filePath, "'\n") {
 		return fmt.Errorf("invalid file path %q", filePath)
 	}
@@ -516,7 +532,8 @@ func (c *SaltClient) WriteFile(ctx context.Context, masterMinion, filePath, cont
 	dir := path.Dir(filePath)
 	// base64 output is [A-Za-z0-9+/=] — safe to single-quote without escaping;
 	// filePath is validated above to contain no quotes.
-	cmd := fmt.Sprintf("mkdir -p '%s' && echo '%s' | base64 -d > '%s'", dir, encoded, filePath)
+	cmd := fmt.Sprintf("mkdir -p '%s' && echo '%s' | base64 -d > '%s' && chmod %04o '%s' || echo 'Error: write failed'",
+		dir, encoded, filePath, mode.Perm(), filePath)
 	raw, err := c.saltRun(ctx, map[string]interface{}{
 		"client":  "local",
 		"tgt":     masterMinion,

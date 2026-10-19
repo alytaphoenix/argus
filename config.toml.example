@@ -41,9 +41,10 @@ salt_api_user  = "saltapi"   # PAM user for salt-api
 
 # Salt — optional; omit to disable the minions screen (m)
 # master_minion: the minion ID of your salt-master host (usually its hostname).
-# Required for 'w' (service wiring) in the Services screen — argus writes pillar
-# files to the master by running cmd.run on this minion.
-# Add to /srv/pillar/top.sls: base: '<master_minion>': [argus_services]
+# Required for automatic service wiring (and the manual 'w' refresh) — argus
+# writes pillar/state files to the master by running cmd.run on this minion.
+# The generated pillar is passed to state.apply inline, so no top.sls entry is
+# required.
 [salt]
 url           = "https://salt.yourdomain.com:8000"
 username      = "saltapi"
@@ -126,10 +127,23 @@ token = ""  # API token from Technitium admin panel
 
 # Smallstep step-ca — optional; enables CA health check in Services screen
 # fingerprint: run `step ca fingerprint` on the CA host
-# Env var: STEPCA_URL
+# acme_provisioner: the ACME provisioner created with
+#   `step ca provisioner add acme --type ACME` (defaults to "acme")
+# acme_url: optional explicit ACME directory URL; normally derived as
+#   <url>/acme/<acme_provisioner>/directory
+# Env vars: STEPCA_URL, STEPCA_ACME_PROVISIONER, STEPCA_ACME_URL
 [stepca]
-url         = "https://ca.yourdomain.com:8443"
-fingerprint = ""  # SHA-256 fingerprint of the root cert (from `step ca fingerprint`)
+url              = "https://ca.yourdomain.com:8443"
+fingerprint      = ""  # SHA-256 fingerprint of the root cert (from `step ca fingerprint`)
+acme_provisioner = "acme"
+acme_url         = ""  # optional override
+
+# Traefik ingress — optional; the address clients and step-ca use to reach
+# Traefik. Defaults to the Proxmox host when empty. Service wiring publishes
+# A records for this address and mounts /etc/traefik into the Traefik container.
+# Env var: TRAEFIK_INGRESS_IP
+[traefik]
+ingress_ip = ""  # e.g. "192.168.1.10"
 
 # Home Assistant — optional; enables the Home Assistant tab in the Services screen
 # and exposes HA entities/services via the MCP server (for Hermes).

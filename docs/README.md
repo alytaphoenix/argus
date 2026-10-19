@@ -5,6 +5,7 @@ Start with the [project README](../README.md) if you are new to argus.
 | Document | What it covers |
 | --- | --- |
 | [Bootstrap and formulas](bootstrap.md) | Platform bootstrap, Salt runtime, opinionated formula registry, TUI/CLI. |
+| [Service DNS and TLS](service-wiring.md) | Automatic Technitium records, Traefik routes, and step-ca ACME certificates. |
 | [Configuration](configuration.md) | Auth, secrets, env vars, every config section, MCP registration. |
 | [Deployment](deployment.md) | Workstation install, Proxmox host bootstrap, systemd, upgrades, uninstall. |
 | [Architecture](architecture.md) | Packages, screens, data flow, clients, MCP, metrics. |

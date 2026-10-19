@@ -14,6 +14,8 @@ supported-version policy.
 | OS keychain | Proxmox/Salt/Nomad/Wazuh/CrowdSec/Matchbox/Technitium/Prometheus/TrueNAS/Plex/HA/Loki/Hermes secrets, per-node SSH passwords | OS keychain ACLs |
 | `~/.config/argus/config.toml` or `/etc/argus/config.toml` | URLs, usernames, non-keychain fallback secrets, Servarr API keys, token secret if `--token` was used | `0600` |
 | SQLite database | Profiles, cloud-init passwords/SSH keys, provisioning metadata, cached service data | database and directory are `0700`/`0600` |
+| Salt master (`/etc/argus/technitium.token`) | Technitium API token used by `services.wiring` | written `0600`, root-only |
+| Salt master (`/srv/pillar/argus_services.sls`) | Traefik static config, DNS metadata, service targets | written `0600`; contains no tokens |
 | `argus.log` | Operational errors | `0600` in a `0700` directory |
 
 **Cloud-init caveat:** `cloud_init_profiles` stores the cloud-init password and

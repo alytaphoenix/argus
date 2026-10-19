@@ -12,6 +12,7 @@ import (
 
 	"github.com/alytaphoenix/argus/api"
 	"github.com/alytaphoenix/argus/db"
+	"github.com/alytaphoenix/argus/wiring"
 )
 
 // ── Services tab ──────────────────────────────────────────────────────────────
@@ -278,72 +279,41 @@ func (m ServicesModel) deleteServiceCmd(id int64) tea.Cmd {
 
 func (m ServicesModel) wiringApplyCmd() tea.Cmd {
 	saltClient := m.saltClient
-	masterMinion := m.masterMinion
-	pillarPath := m.pillarBase + "/argus_services.sls"
-	statePath := m.stateBase + "/services/wiring.sls"
-	pillarContent := m.allServicesPillarYAML()
+	database := m.database
+	cfg := m.cfg
 	return func() tea.Msg {
+		if saltClient == nil {
+			return svcWiringAppliedMsg{err: fmt.Errorf("salt is not configured")}
+		}
+		if database == nil {
+			return svcWiringAppliedMsg{err: fmt.Errorf("local database unavailable")}
+		}
+		services, err := database.Services()
+		if err != nil {
+			return svcWiringAppliedMsg{err: fmt.Errorf("load services: %w", err)}
+		}
+		opts := wiring.FromConfig(&cfg)
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		if err := saltClient.WriteFile(ctx, masterMinion, pillarPath, pillarContent); err != nil {
-			return svcWiringAppliedMsg{err: fmt.Errorf("pillar: %w", err)}
-		}
-		if err := saltClient.WriteFile(ctx, masterMinion, statePath, api.WiringStateTemplate); err != nil {
-			return svcWiringAppliedMsg{err: fmt.Errorf("state: %w", err)}
-		}
-		jid, err := saltClient.ApplyState(ctx, masterMinion, "services.wiring")
+		jid, err := wiring.Apply(ctx, saltClient, services, opts)
 		if err != nil {
-			return svcWiringAppliedMsg{err: fmt.Errorf("apply: %w", err)}
+			return svcWiringAppliedMsg{err: err}
 		}
 		return svcWiringAppliedMsg{notice: "wiring dispatched — JID " + jid}
 	}
 }
 
-func (m ServicesModel) allServicesPillarYAML() string {
-	var sb strings.Builder
-	sb.WriteString("# argus-managed — do not edit; regenerated with 'w' from the Services screen\n")
-	sb.WriteString("# Add to /srv/pillar/top.sls: base: '<master_minion>': [argus_services]\n")
-	sb.WriteString("services:\n")
-	seen := map[string]bool{}
-	for _, svc := range m.services {
-		slug := serviceSlug(svc.Name)
-		if slug == "" || seen[slug] {
-			continue
-		}
-		seen[slug] = true
-		fqdn := slug
-		zone := m.domain
-		if m.domain != "" {
-			fqdn = slug + "." + m.domain
-		}
-		sb.WriteString(fmt.Sprintf("  %s:\n", slug))
-		sb.WriteString(fmt.Sprintf("    host: \"%s\"\n", svc.Host))
-		sb.WriteString(fmt.Sprintf("    port: %d\n", svc.Port))
-		sb.WriteString(fmt.Sprintf("    scheme: \"%s\"\n", svc.Scheme))
-		sb.WriteString(fmt.Sprintf("    fqdn: \"%s\"\n", fqdn))
-		sb.WriteString(fmt.Sprintf("    dns_zone: \"%s\"\n", zone))
-		sb.WriteString("    traefik: true\n")
-		sb.WriteString("    cert: false\n")
+// autoWireCmd re-applies wiring after the registry changes, when Salt and a
+// master minion are configured. It is a no-op otherwise so adding a service
+// still works without Salt.
+func (m ServicesModel) autoWireCmd() tea.Cmd {
+	if m.saltClient == nil || m.database == nil || !wiring.FromConfig(&m.cfg).AutoEnabled() {
+		return nil
 	}
-	return sb.String()
+	return m.wiringApplyCmd()
 }
 
-func serviceSlug(name string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(name) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
-		}
-	}
-	s := b.String()
-	for strings.Contains(s, "--") {
-		s = strings.ReplaceAll(s, "--", "-")
-	}
-	return strings.Trim(s, "-")
-}
+func serviceSlug(name string) string { return wiring.Slug(name) }
 
 func (m ServicesModel) updateSvc(msg tea.Msg) (ServicesModel, tea.Cmd, bool) {
 	switch msg := msg.(type) {
@@ -375,15 +345,20 @@ func (m ServicesModel) updateSvc(msg tea.Msg) (ServicesModel, tea.Cmd, bool) {
 
 	case serviceAddedMsg:
 		m.addingSvc = false
+		cmd := m.loadAll()
 		if msg.err != nil {
 			m.notice = "add failed: " + msg.err.Error()
 		} else {
 			m.notice = "service added"
 			m.resetSvcForm()
+			if auto := m.autoWireCmd(); auto != nil {
+				cmd = tea.Batch(cmd, auto)
+			}
 		}
-		return m, m.loadAll(), true
+		return m, cmd, true
 
 	case serviceDeletedMsg:
+		cmd := m.loadAll()
 		if msg.err != nil {
 			m.notice = "delete failed: " + msg.err.Error()
 		} else {
@@ -391,8 +366,11 @@ func (m ServicesModel) updateSvc(msg tea.Msg) (ServicesModel, tea.Cmd, bool) {
 			if m.svcCursor >= len(m.services)-1 && m.svcCursor > 0 {
 				m.svcCursor--
 			}
+			if auto := m.autoWireCmd(); auto != nil {
+				cmd = tea.Batch(cmd, auto)
+			}
 		}
-		return m, m.loadAll(), true
+		return m, cmd, true
 
 	case svcWiringAppliedMsg:
 		if msg.err != nil {

@@ -785,3 +785,35 @@ secret   = "file-secret"
 		t.Errorf("TokenID = %q, want file-token (from file)", cfg.TokenID)
 	}
 }
+
+func TestStepCAACMEEndpoint(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  StepCAConfig
+		want string
+	}{
+		{"explicit", StepCAConfig{URL: "https://ca:8443", ACMEURL: "https://acme/directory"}, "https://acme/directory"},
+		{"derived", StepCAConfig{URL: "https://ca:8443/", ACMEProvisioner: "acme"}, "https://ca:8443/acme/acme/directory"},
+		{"missing provisioner", StepCAConfig{URL: "https://ca:8443"}, ""},
+		{"no url", StepCAConfig{ACMEProvisioner: "acme"}, ""},
+	}
+	for _, tc := range cases {
+		if got := tc.cfg.ACMEEndpoint(); got != tc.want {
+			t.Errorf("%s: ACMEEndpoint() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestApplyGlobalsDefaultsACMEProvisioner(t *testing.T) {
+	cfg := &Config{StepCA: StepCAConfig{URL: "https://ca:8443"}}
+	cfg.ApplyGlobals()
+	if cfg.StepCA.ACMEProvisioner != "acme" {
+		t.Errorf("ACMEProvisioner = %q, want acme", cfg.StepCA.ACMEProvisioner)
+	}
+
+	cfg = &Config{StepCA: StepCAConfig{URL: "https://ca:8443", ACMEProvisioner: "internal"}}
+	cfg.ApplyGlobals()
+	if cfg.StepCA.ACMEProvisioner != "internal" {
+		t.Errorf("explicit ACMEProvisioner overwritten: %q", cfg.StepCA.ACMEProvisioner)
+	}
+}

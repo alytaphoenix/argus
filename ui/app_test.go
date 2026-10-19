@@ -87,7 +87,7 @@ func TestApplySaltProfileWithoutDatabase(t *testing.T) {
 }
 
 func TestProvisionQDoesNotQuit(t *testing.T) {
-	m := NewProvisionModel(nil, api.Node{}, config.DefaultsConfig{}, nil)
+	m := NewProvisionModel(nil, api.Node{}, config.DefaultsConfig{}, nil, nil, "")
 	updated, cmd := m.Update(keyMsg("q"))
 	if !strings.HasSuffix(updated.inputs[provFieldTemplate].Value(), "q") {
 		t.Fatal("q should be typed into the focused field")

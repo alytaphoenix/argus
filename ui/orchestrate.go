@@ -13,6 +13,7 @@ import (
 	"github.com/alytaphoenix/argus/api"
 	"github.com/alytaphoenix/argus/config"
 	"github.com/alytaphoenix/argus/db"
+	"github.com/alytaphoenix/argus/wiring"
 )
 
 // bsvcStatus represents the live check status of one bootstrap service.
@@ -293,6 +294,7 @@ func (m OrchestrateModel) applyKeyActionCmd(action, minion, profileName string, 
 	saltCfg := m.saltCfg
 	dnsClient := m.dnsClient
 	domain := m.cfg.Globals.Domain
+	cfg := m.cfg
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
@@ -333,14 +335,38 @@ func (m OrchestrateModel) applyKeyActionCmd(action, minion, profileName string, 
 			return orchAcceptDoneMsg{minion: minion, action: action}
 		}
 		failed := applySaltProfile(ctx, saltClient, database, saltCfg, minion, profileName, vmid)
+		if len(failed) == 0 {
+			// The node is now managed; refresh DNS/Traefik/certs for any
+			// services registered against it.
+			autoWireServices(ctx, saltClient, database, &cfg)
+		}
 		return orchAcceptDoneMsg{minion: minion, action: action, failedStates: failed}
 	}
+}
+
+// autoWireServices re-applies the service pillar after a provisioned node
+// becomes managed. It is best-effort: a wiring failure must not turn a
+// successful Salt apply into an acceptance failure.
+func autoWireServices(ctx context.Context, saltClient *api.SaltClient, database *db.DB, cfg *config.Config) {
+	if saltClient == nil || database == nil {
+		return
+	}
+	services, err := database.Services()
+	if err != nil || len(services) == 0 {
+		return
+	}
+	opts := wiring.FromConfig(cfg)
+	if !opts.AutoEnabled() {
+		return
+	}
+	_, _ = wiring.Apply(ctx, saltClient, services, opts)
 }
 
 func (m OrchestrateModel) applyPendingVMCmd(vm db.ProvisionedVM) tea.Cmd {
 	saltClient := m.saltClient
 	database := m.database
 	saltCfg := m.saltCfg
+	cfg := m.cfg
 	return func() tea.Msg {
 		if saltClient == nil {
 			return orchAcceptDoneMsg{minion: vm.Name, action: "apply", err: fmt.Errorf("Salt not configured")}
@@ -348,6 +374,9 @@ func (m OrchestrateModel) applyPendingVMCmd(vm db.ProvisionedVM) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		failed := applySaltProfile(ctx, saltClient, database, saltCfg, vm.Name, vm.SaltProfile, vm.VMID)
+		if len(failed) == 0 {
+			autoWireServices(ctx, saltClient, database, &cfg)
+		}
 		return orchAcceptDoneMsg{minion: vm.Name, action: "apply", failedStates: failed}
 	}
 }

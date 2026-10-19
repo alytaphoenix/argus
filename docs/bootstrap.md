@@ -55,7 +55,7 @@ Built-ins are deliberately small and safe:
 | `docker` | Runtime | Debian docker.io + docker-compose, Docker enabled. |
 | `node-exporter` | Observability | prometheus-node-exporter on `:9100`. |
 | `technitium` | Network | Technitium DNS container (`:53`, `:5380`). |
-| `traefik` | Network | Traefik v3 container (`:80`, `:443`). |
+| `traefik` | Network | Traefik v3 container (`:80`, `:443`) with the file provider and `/etc/traefik` mounted. |
 | `uptime-kuma` | Observability | Uptime Kuma container (`:3001`). |
 
 Integrations: `truenas`, `plex`, `servarr`, `hermes`.
@@ -80,6 +80,12 @@ Open the **Bootstrap** tab (after **Orch**).
 The readiness panel shows Proxmox inventory, SSH, Salt runtime, Salt API/keys,
 and the state tree. The registry shows `applied`, `available`, or `external`
 for each formula.
+
+Service wiring is now automatic: adding, removing, or changing a service in the
+Services registry pushes the DNS/Traefik pillar and applies `services.wiring`.
+The same refresh runs after a provisioned node's Salt profile is applied. See
+[Service DNS and TLS](service-wiring.md) for the required `[technitium]`,
+`[traefik]`, and `[stepca]` configuration.
 
 ## Salt runtime layout
 

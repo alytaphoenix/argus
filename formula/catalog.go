@@ -132,6 +132,7 @@ func catalog() []Formula {
 			Files: map[string]string{
 				"init.sls":     traefikSLS,
 				"compose.yaml": traefikCompose,
+				"traefik.yml":  traefikStaticConfig,
 			},
 			Docs: "Runs traefik:v3 with :80/:443. The docker socket is mounted read-only; this is still a privileged interface.",
 		},
@@ -351,6 +352,17 @@ include:
   file.directory:
     - makedirs: True
 
+/etc/traefik:
+  file.directory:
+    - makedirs: True
+
+# replace: False keeps an ACME-enabled config written by argus service wiring.
+/etc/traefik/traefik.yml:
+  file.managed:
+    - source: salt://argus/traefik/traefik.yml
+    - makedirs: True
+    - replace: False
+
 argus-traefik-compose:
   file.managed:
     - name: /opt/argus/traefik/compose.yaml
@@ -364,8 +376,18 @@ argus-traefik-up:
     - unless: docker-compose ps --services --filter status=running | grep -qx traefik
     - require:
       - file: argus-traefik-compose
+      - file: /etc/traefik/traefik.yml
       - pkg: argus-docker-packages
       - service: argus-docker-service
+
+# Recreate the container when the compose definition changes (for example when
+# upgrading to the configFile + /etc/traefik mount layout).
+argus-traefik-reload:
+  cmd.wait:
+    - name: docker-compose up -d
+    - cwd: /opt/argus/traefik
+    - watch:
+      - file: argus-traefik-compose
 `
 
 const traefikCompose = `services:
@@ -374,14 +396,24 @@ const traefikCompose = `services:
     container_name: traefik
     restart: unless-stopped
     command:
-      - --api.dashboard=false
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --entrypoints.web.address=:80
-      - --entrypoints.websecure.address=:443
+      - --configFile=/etc/traefik/traefik.yml
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/traefik:/etc/traefik
+`
+
+const traefikStaticConfig = `# Managed by argus — Traefik static configuration.
+# Service wiring replaces this file when step-ca ACME is configured.
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
 `

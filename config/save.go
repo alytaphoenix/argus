@@ -184,11 +184,19 @@ func renderConfig(cfg *Config) string {
 		fmt.Fprint(&b, "# token stored in Keychain (key: technitium_token)\n")
 	}
 
+	// ── Traefik ingress ─────────────────────────────────────────────────────────
+	if cfg.Traefik.IngressIP != "" {
+		fmt.Fprint(&b, "\n[traefik]\n")
+		writeStr(&b, "ingress_ip", cfg.Traefik.IngressIP)
+	}
+
 	// ── step-ca ─────────────────────────────────────────────────────────────────
 	if cfg.StepCA.URL != "" {
 		fmt.Fprint(&b, "\n[stepca]\n")
 		writeStr(&b, "url", cfg.StepCA.URL)
 		writeStr(&b, "fingerprint", cfg.StepCA.Fingerprint)
+		writeStr(&b, "acme_provisioner", cfg.StepCA.ACMEProvisioner)
+		writeStr(&b, "acme_url", cfg.StepCA.ACMEURL)
 	}
 
 	// ── Matchbox ────────────────────────────────────────────────────────────────

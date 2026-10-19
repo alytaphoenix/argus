@@ -112,7 +112,8 @@ Only Proxmox is required. Omit any other section to disable that integration.
 | `[loki]` | Loki URL and optional bearer token. |
 | `[truenas]` | TrueNAS REST URL, API key, TLS mode. |
 | `[technitium]` | Technitium DNS URL and API token. |
-| `[stepca]` | step-ca URL and optional SHA-256 root fingerprint. |
+| `[stepca]` | step-ca URL, optional SHA-256 root fingerprint, and ACME provisioner/directory. |
+| `[traefik]` | Traefik ingress IP used for automatic service DNS and TLS. |
 | `[matchbox]` | Matchbox PXE URL and optional token. |
 | `[crowdsec]` | CrowdSec Local API URL and key. |
 | `[wazuh]` | Wazuh REST URL, credentials, TLS mode. |
@@ -131,6 +132,30 @@ CA root's SHA-256; argus verifies and pins it before using TLS.
 
 Wazuh verifies TLS by default; set `insecure = true` only if it uses a
 self-signed certificate that you cannot trust another way.
+
+## Service DNS and TLS
+
+Once `[globals] domain`, `[technitium]`, `[salt] master_minion`, and (for
+certificates) `[stepca]` are configured, argus automatically creates a DNS
+record and Traefik route for every enabled service in the registry, and lets
+Traefik obtain certificates from step-ca's ACME endpoint.
+
+```toml
+[globals]
+domain = "home.arpa"
+
+[traefik]
+ingress_ip = "192.168.1.10"  # defaults to the Proxmox host
+
+[stepca]
+url              = "https://ca.home.arpa:8443"
+acme_provisioner = "acme"    # default when url is set
+# acme_url = "https://ca.home.arpa:8443/acme/acme/directory"
+```
+
+VM provisioning also creates `<vm-name>.<domain>` once the guest agent reports
+an IP. See [Service DNS and TLS](service-wiring.md) for the full behavior,
+requirements, and failure modes.
 
 ## Bootstrap
 

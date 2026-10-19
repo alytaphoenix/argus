@@ -66,10 +66,11 @@ type nomadSyncDoneMsg struct {
 // Provision messages
 type openProvisionMsg struct{ node api.Node }
 type provisionDoneMsg struct {
-	taskID string
-	vmid   int
-	count  int
-	err    error
+	taskID   string
+	vmid     int
+	count    int
+	err      error
+	warnings []string
 }
 
 // Credentials messages

@@ -41,8 +41,9 @@ integrations except Proxmox are optional.
 - **Bootstrap:** checks DNS, certificates, TrueNAS, Plex, Servarr, Hermes, and
   Signal; inventories existing guests before proposing anything; never
   reprovisions an existing VM automatically.
-- **Services:** health checks, service registry, DNS records, certificates,
-  TrueNAS pools/datasets, Home Assistant.
+- **Services:** health checks, service registry, automatic Technitium DNS
+  records and Traefik routes, step-ca ACME certificates, TrueNAS
+  pools/datasets, Home Assistant.
 - **Observability:** Prometheus queries, local resource history, Loki log
   browsing, and a built-in metrics exporter.
 - **Security:** CrowdSec decisions, Wazuh agents/alerts, TCP port scanning.

@@ -1,68 +1,93 @@
 package api
 
-// WiringStateTemplate is the Salt/Jinja state pushed to the master by argus
-// (Services screen → w). Deploy target: /srv/salt/services/wiring.sls.
+// WiringStateTemplate is the Salt/Jinja state pushed to the master by argus.
+// Deploy target: /srv/salt/services/wiring.sls.
 //
-// Required master pillar keys (add to your pillar):
+// The wiring package applies it with an inline pillar, so no
+// /srv/pillar/top.sls entry is required. The pillar supplies:
 //
-//	technitium_url    http://dns.local:5380
-//	technitium_token  <api-token>
-//	traefik_dir       /etc/traefik/dynamic   (default)
-//	stepca_url        https://ca.local:9000  (only needed for cert: true services)
-//
-// Add to /srv/pillar/top.sls:
-//
-//	base:
-//	  '<master_minion>':
-//	    - argus_services
+//	technitium_url          Technitium base URL
+//	technitium_token_file   root-only token file path (never the token)
+//	traefik_dir             dynamic config directory
+//	traefik_static_config   Traefik static config (ACME when configured)
+//	services                map of slug -> host/port/scheme/fqdn/cert
 //
 // Apply: salt '<master_minion>' state.apply services.wiring
 const WiringStateTemplate = `# services.wiring — managed by argus
-# Regenerate pillar + re-apply with 'w' from the Services screen.
+# Regenerated automatically from the service registry; do not edit.
 #
-# Pillar shape (from /srv/pillar/argus_services.sls):
-#   services:
-#     gitea:
-#       host: 10.0.0.5
-#       port: 3000
-#       scheme: http
-#       fqdn: gitea.home.arpa
-#       dns_zone: home.arpa
-#       traefik: true
-#       cert: false
+# The pillar (argus_services.sls) contains the Traefik static config, the
+# Technitium token *path* (never the token), DNS metadata, and one entry per
+# service. Traefik obtains certificates through the step-ca ACME resolver when
+# [stepca] acme_provisioner/acme_url is configured.
 
-{% set dns_url     = pillar.get('technitium_url', '') %}
-{% set dns_token   = pillar.get('technitium_token', '') %}
-{% set traefik_dir = pillar.get('traefik_dir', '/etc/traefik/dynamic') %}
-{% set stepca_url  = pillar.get('stepca_url', '') %}
+{% set dns_url          = pillar.get('technitium_url', '') %}
+{% set dns_token_file   = pillar.get('technitium_token_file', '') %}
+{% set traefik_dir      = pillar.get('traefik_dir', '/etc/traefik/dynamic') %}
+{% set traefik_acme_dir = pillar.get('traefik_acme_dir', '/etc/traefik/acme') %}
+{% set traefik_static   = pillar.get('traefik_static_path', '/etc/traefik/traefik.yml') %}
+{% set static_config    = pillar.get('traefik_static_config', '') %}
+{% set cert_resolver    = pillar.get('stepca_cert_resolver', '') %}
+
+traefik-dirs:
+  file.directory:
+    - names:
+      - {{ traefik_dir }}
+      - {{ traefik_acme_dir }}
+    - makedirs: True
+
+{% if static_config %}
+traefik-static:
+  file.managed:
+    - name: {{ traefik_static }}
+    - makedirs: True
+    - contents: |
+{{ static_config | indent(8, true) }}
+    - watch_in:
+      - cmd: traefik-restart
+{% endif %}
+
+traefik-restart:
+  cmd.wait:
+    - name: docker restart traefik
+    - onlyif: docker ps --filter name=traefik --filter status=running -q | grep -q .
 
 {% for name, svc in pillar.get('services', {}).items() %}
-{% set fqdn   = svc.get('fqdn', name) %}
-{% set host   = svc.get('host', '') %}
-{% set port   = svc.get('port', 80) %}
-{% set scheme = svc.get('scheme', 'http') %}
-{% set zone   = svc.get('dns_zone', '') %}
+{% set fqdn       = svc.get('fqdn', name) %}
+{% set host       = svc.get('host', '') %}
+{% set port       = svc.get('port', 80) %}
+{% set scheme     = svc.get('scheme', 'http') %}
+{% set zone       = svc.get('dns_zone', '') %}
+{% set dns_type   = svc.get('dns_type', 'A') %}
+{% set dns_value  = svc.get('dns_value', host) %}
 
-{% if dns_url and dns_token and zone and host %}
+{% if dns_url and dns_token_file and zone and dns_value %}
 {{ name }}_dns:
   cmd.run:
-    # Token is passed through the environment ($DNS_TOKEN) rather than embedded
-    # in the command name, so it does not appear in job returns or process args.
     - name: >-
-        curl -sf "{{ dns_url }}/api/zones/records/add?token=$DNS_TOKEN&zone={{ zone }}&domain={{ fqdn }}&type=A&ipAddress={{ host }}&overwrite=true"
+        curl -sf -G "{{ dns_url }}/api/zones/records/add"
+        --data-urlencode "token@{{ dns_token_file }}"
+        --data-urlencode "zone={{ zone }}"
+        --data-urlencode "domain={{ fqdn }}"
+        --data-urlencode "type={{ dns_type }}"
+        --data-urlencode "{% if dns_type == 'CNAME' %}cname{% else %}ipAddress{% endif %}={{ dns_value }}"
+        --data-urlencode "overwrite=true"
     - unless: >-
-        curl -sf "{{ dns_url }}/api/zones/records/get?token=$DNS_TOKEN&zone={{ zone }}&domain={{ fqdn }}" |
-        python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if any(r.get('rData',{}).get('ipAddress')=='{{ host }}' for r in d.get('response',{}).get('records',[])) else 1)"
-    - env:
-        - DNS_TOKEN: '{{ dns_token }}'
+        curl -sf -G "{{ dns_url }}/api/zones/records/get"
+        --data-urlencode "token@{{ dns_token_file }}"
+        --data-urlencode "zone={{ zone }}"
+        --data-urlencode "domain={{ fqdn }}" |
+        python3 -c "import sys,json; d=json.load(sys.stdin); rs=d.get('response',{}).get('records',[]); t='{{ dns_type }}'; v='{{ dns_value }}'; ok=any(r.get('type')==t and (r.get('rData',{}).get('ipAddress')==v or r.get('rData',{}).get('cname')==v) for r in rs); sys.exit(0 if ok else 1)"
     - output_loglevel: quiet
 {% endif %}
 
-{% if svc.get('traefik', false) %}
+{% if svc.get('traefik', false) and host %}
 {{ name }}_traefik:
   file.managed:
     - name: {{ traefik_dir }}/{{ name }}.yml
-    - makedirs: true
+    - makedirs: True
+    - require:
+      - file: traefik-dirs
     - contents: |
         http:
           routers:
@@ -70,9 +95,13 @@ const WiringStateTemplate = `# services.wiring — managed by argus
               rule: "Host(` + "`" + `{{ fqdn }}` + "`" + `)"
               entryPoints:
                 - websecure
-              service: {{ name }}{% if svc.get('cert', false) %}
-              tls: {}{% endif %}
-
+              service: {{ name }}
+{% if svc.get('cert', false) and cert_resolver %}
+              tls:
+                certResolver: {{ cert_resolver }}
+{% else %}
+              tls: {}
+{% endif %}
           services:
             {{ name }}:
               loadBalancer:
@@ -80,22 +109,21 @@ const WiringStateTemplate = `# services.wiring — managed by argus
                   - url: "{{ scheme }}://{{ host }}:{{ port }}"
 {% endif %}
 
-{% if svc.get('cert', false) and stepca_url %}
-{{ name }}_cert:
-  cmd.run:
-    - name: >-
-        step ca certificate {{ fqdn }}
-        /etc/step/certs/{{ fqdn }}.crt /etc/step/certs/{{ fqdn }}.key
-        --ca-url {{ stepca_url }} --root /etc/step/certs/root_ca.crt
-        --not-after 2160h --force
-    # Issue when the cert is missing or within 30 days of expiry, so it renews
-    # instead of only ever being created once.
-    - onlyif: >-
-        test ! -f /etc/step/certs/{{ fqdn }}.crt ||
-        step certificate needs-renewal /etc/step/certs/{{ fqdn }}.crt --expires-in 720h
-{% endif %}
-
 {% endfor %}
+
+# Remove dynamic files for services that were deleted from the registry.
+traefik-cleanup:
+  cmd.run:
+    - name: |
+        set -e
+        keep="{{ pillar.get('services', {}).keys() | join(' ') }}"
+        for f in {{ traefik_dir }}/*.yml; do
+          [ -e "$f" ] || continue
+          b=$(basename "$f" .yml)
+          case " $keep " in *" $b "*) ;; *) rm -f "$f" ;; esac
+        done
+    - require:
+      - file: traefik-dirs
 `
 
 // NASMountTemplate is a Salt/Jinja state that mounts TrueNAS NFS shares on a
