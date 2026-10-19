@@ -157,7 +157,32 @@ func renderHelpOverlay(title string, lines []string, w, h int) string {
 	return sb.String()
 }
 
+// sanitizeText neutralises terminal escape sequences and control characters in
+// data that comes from Proxmox, Salt, Plex, DNS, logs, or other remote
+// services. Without this, a malicious guest name or log line could inject ANSI
+// escapes into the TUI (cursor movement, OSC 52 clipboard writes, spoofed UI).
+func sanitizeText(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			b.WriteRune(' ')
+		case r < 0x20 || r == 0x7f:
+			// drop C0 controls (including ESC)
+		case r >= 0x80 && r <= 0x9f:
+			// drop C1 controls
+		case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+			// drop bidi embedding/override controls
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func truncate(s string, n int) string {
+	s = sanitizeText(s)
 	if len([]rune(s)) <= n {
 		return s
 	}

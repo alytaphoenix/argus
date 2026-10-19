@@ -186,12 +186,6 @@ func (m SaltDetailModel) pollJobResult(jid string, eventID int64, attempt int) t
 	}
 }
 
-func (m SaltDetailModel) reloadEvents() {
-	if m.database != nil {
-		m.events, _ = m.database.SaltApplyEventsForMinion(m.minion.ID, 10)
-	}
-}
-
 func (m SaltDetailModel) Update(msg tea.Msg) (SaltDetailModel, tea.Cmd) {
 	// ── apply sub-prompt: custom state ─────────────────────────────────────
 	if m.applyMode == saltApplyCustom {

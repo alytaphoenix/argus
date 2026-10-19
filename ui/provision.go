@@ -139,6 +139,54 @@ func (m ProvisionModel) loadCIProfile() (ProvisionModel, tea.Cmd) {
 	return m, nil
 }
 
+// startSubmit validates the form and, if it is complete, begins cloning.
+// Validation lives here (rather than being silently coerced by strconv.Atoi
+// in submit) so a typo like "4x" doesn't quietly provision a VM with 0 vCPUs.
+func (m ProvisionModel) startSubmit() (ProvisionModel, tea.Cmd) {
+	if strings.TrimSpace(m.inputs[provFieldName].Value()) == "" {
+		m.err = fmt.Errorf("VM name is required")
+		return m, nil
+	}
+	if strings.TrimSpace(m.inputs[provFieldTemplate].Value()) == "" {
+		m.err = fmt.Errorf("template VMID is required")
+		return m, nil
+	}
+
+	numeric := []struct {
+		idx   int
+		label string
+		min   int
+	}{
+		{provFieldTemplate, "template VMID", 1},
+		{provFieldCPU, "CPU cores", 1},
+		{provFieldMemory, "memory", 128},
+		{provFieldBatch, "VM count", 1},
+	}
+	for _, f := range numeric {
+		raw := strings.TrimSpace(m.inputs[f.idx].Value())
+		if raw == "" {
+			continue
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < f.min {
+			m.err = fmt.Errorf("%s must be a number >= %d", f.label, f.min)
+			return m, nil
+		}
+	}
+
+	if raw := strings.TrimSpace(m.inputs[provFieldVMID].Value()); raw != "" {
+		if n, err := strconv.Atoi(raw); err != nil || n <= 0 {
+			m.err = fmt.Errorf("new VMID must be a positive number (or blank for auto)")
+			return m, nil
+		}
+	}
+
+	m.submitting = true
+	m.err = nil
+	m.profileNotice = ""
+	return m, tea.Batch(m.spinner.Tick, m.submit())
+}
+
 func (m ProvisionModel) submit() tea.Cmd {
 	client := m.client
 	node := m.node
@@ -285,23 +333,27 @@ func (m ProvisionModel) Update(msg tea.Msg) (ProvisionModel, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c", "q":
+		// Only ctrl+c quits: this screen is one big text form, so "q" (and
+		// every other printable key) must reach the focused input. esc
+		// cancels back to the guest list.
+		case "ctrl+c":
 			return m, tea.Quit
-		case "esc", "b":
+		case "esc":
 			return m, func() tea.Msg { return backMsg{} }
 		case "ctrl+l":
 			// Load a cloud-init profile by name
 			return m.loadCIProfile()
 		case "ctrl+s":
-			if m.inputs[provFieldName].Value() == "" {
-				m.err = fmt.Errorf("VM name is required")
-				return m, nil
+			return m.startSubmit()
+		case "enter":
+			if m.focused == provFieldCount-1 {
+				return m.startSubmit()
 			}
-			m.submitting = true
-			m.err = nil
-			m.profileNotice = ""
-			return m, tea.Batch(m.spinner.Tick, m.submit())
-		case "tab", "enter", "down":
+			m.inputs[m.focused].Blur()
+			m.focused = (m.focused + 1) % provFieldCount
+			m.inputs[m.focused].Focus()
+			return m, textinput.Blink
+		case "tab", "down":
 			m.inputs[m.focused].Blur()
 			m.focused = (m.focused + 1) % provFieldCount
 			m.inputs[m.focused].Focus()
@@ -382,7 +434,7 @@ func (m ProvisionModel) View() string {
 		sb.WriteString(styleRunning.Render("  ✓ "+m.taskID) + "\n\n")
 	}
 
-	sb.WriteString(styleDim.Render("  " + strings.Repeat("─", max(m.width-4, 50))) + "\n")
+	sb.WriteString(styleDim.Render("  "+strings.Repeat("─", max(m.width-4, 50))) + "\n")
 	sb.WriteString(styleHelp.Render("  tab/↓ next  shift+tab/↑ prev  ctrl+L load CI profile  ctrl+s submit  esc cancel") + "\n")
 	return sb.String()
 }

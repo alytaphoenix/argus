@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -69,7 +70,7 @@ type ServarrAppConfig struct {
 // override them where they overlap.
 type GlobalsConfig struct {
 	// SSHUser is the default SSH username for all node and VM connections.
-	// Overrides defaults.ssh_user if set. Default: "alyta"
+	// Overrides defaults.ssh_user if set. Default: local username
 	SSHUser string `toml:"ssh_user"`
 
 	// SSHKey is the path to an SSH private key file (e.g. ~/.ssh/id_ed25519).
@@ -349,15 +350,27 @@ func (cfg *Config) Validate() error {
 	return nil
 }
 
+// defaultSSHUser returns the current local username, with a portable fallback.
+// This keeps the public release from baking one developer's username into the
+// default configuration.
+func defaultSSHUser() string {
+	for _, key := range []string{"USER", "USERNAME"} {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			return v
+		}
+	}
+	return "root"
+}
+
 // ApplyGlobals propagates [globals] settings into sub-sections that support them.
 // Called after all config sources (file + env) are merged. Sub-section values
 // that are already set explicitly are never overwritten.
 func (cfg *Config) ApplyGlobals() {
 	g := &cfg.Globals
 
-	// Default SSH user: globals → defaults.ssh_user → "alyta"
+	// Default SSH user: globals → defaults.ssh_user → local username.
 	if g.SSHUser == "" {
-		g.SSHUser = "alyta"
+		g.SSHUser = defaultSSHUser()
 	}
 	if cfg.Defaults.SSHUser == "" {
 		cfg.Defaults.SSHUser = g.SSHUser

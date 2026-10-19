@@ -19,11 +19,12 @@ func TestMain(m *testing.M) {
 func TestApplyGlobalsDefaultSSHUser(t *testing.T) {
 	cfg := &Config{}
 	cfg.ApplyGlobals()
-	if cfg.Globals.SSHUser != "alyta" {
-		t.Errorf("SSHUser = %q, want alyta", cfg.Globals.SSHUser)
+	want := defaultSSHUser()
+	if cfg.Globals.SSHUser != want {
+		t.Errorf("SSHUser = %q, want %q", cfg.Globals.SSHUser, want)
 	}
-	if cfg.Defaults.SSHUser != "alyta" {
-		t.Errorf("Defaults.SSHUser = %q, want alyta", cfg.Defaults.SSHUser)
+	if cfg.Defaults.SSHUser != want {
+		t.Errorf("Defaults.SSHUser = %q, want %q", cfg.Defaults.SSHUser, want)
 	}
 }
 

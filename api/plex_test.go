@@ -14,9 +14,13 @@ import (
 func newPlexTestServer(t *testing.T, token string, mux *http.ServeMux) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify token is passed
-		if got := r.URL.Query().Get("X-Plex-Token"); got != token {
+		// Verify the token is passed as a header, not a URL query parameter.
+		if got := r.Header.Get("X-Plex-Token"); got != token {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Query().Get("X-Plex-Token") != "" {
+			http.Error(w, "token must not be in URL", http.StatusBadRequest)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -141,7 +145,7 @@ func TestPlexClientSessions(t *testing.T) {
 						"type":             "movie",
 						"viewOffset":       30000,
 						"duration":         9000000,
-						"User":             map[string]interface{}{"title": "alyta"},
+						"User":             map[string]interface{}{"title": "testuser"},
 						"Player":           map[string]interface{}{"device": "TV", "state": "playing", "product": "Plex for TV"},
 					},
 				},
@@ -167,8 +171,8 @@ func TestPlexClientSessions(t *testing.T) {
 	if s.Title != "Inception" {
 		t.Errorf("Title = %q, want Inception", s.Title)
 	}
-	if s.User.Title != "alyta" {
-		t.Errorf("User.Title = %q, want alyta", s.User.Title)
+	if s.User.Title != "testuser" {
+		t.Errorf("User.Title = %q, want testuser", s.User.Title)
 	}
 	if s.Player.State != "playing" {
 		t.Errorf("Player.State = %q, want playing", s.Player.State)
@@ -295,13 +299,13 @@ func newServarrTestServer(t *testing.T, apiKey string) *httptest.Server {
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"records": []map[string]interface{}{
 					{
-						"title":                "Some Show S01E01",
-						"status":               "downloading",
+						"title":                 "Some Show S01E01",
+						"status":                "downloading",
 						"trackedDownloadStatus": "ok",
-						"size":                 1073741824.0,
-						"sizeleft":             536870912.0,
-						"timeleft":             "00:15:00",
-						"protocol":             "torrent",
+						"size":                  1073741824.0,
+						"sizeleft":              536870912.0,
+						"timeleft":              "00:15:00",
+						"protocol":              "torrent",
 					},
 				},
 			})

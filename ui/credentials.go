@@ -340,8 +340,9 @@ func (m CredentialsModel) View() string {
 		styleDim.Render(" › ") +
 		styleBold.Render("credentials & keys") + "\n\n")
 
-	sb.WriteString(styleDim.Render(`  All secrets are stored in the macOS Keychain — never written to disk.`) + "\n")
-	sb.WriteString(styleDim.Render(`  Config file values act as fallback only; keychain entries take priority.`) + "\n")
+	sb.WriteString(styleDim.Render(`  Keychain-backed secrets are not written to the config file.`) + "\n")
+	sb.WriteString(styleDim.Render(`  Cloud-init passwords and Servarr API keys live in the local DB/config (0600).`) + "\n")
+	sb.WriteString(styleDim.Render(`  Protect backups: the SQLite DB can contain cloud-init secrets.`) + "\n")
 	sb.WriteString(styleDim.Render("  Global SSH user: ") +
 		styleBold.Render(m.globals.SSHUser))
 	if m.globals.Domain != "" {

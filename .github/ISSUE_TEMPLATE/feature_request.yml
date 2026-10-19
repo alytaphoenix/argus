@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest an integration, workflow, or usability improvement
+title: "[feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what is missing or awkward?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or screen you would like.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Proxmox / guests
+        - Salt / orchestration
+        - Bootstrap
+        - Services / DNS / certs
+        - Storage / TrueNAS
+        - Media / Plex / Servarr
+        - Security / CrowdSec / Wazuh
+        - Maintenance / lifecycle / runbooks
+        - Metrics / Loki / Prometheus
+        - MCP server
+        - Docs / packaging
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I checked existing issues and documentation.
+          required: true

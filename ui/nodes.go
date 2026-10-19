@@ -15,17 +15,17 @@ import (
 )
 
 type NodesModel struct {
-	client    *api.Client
-	database  *db.DB
-	nodes     []api.Node
-	cursor    int
-	loading   bool
-	err       error
-	hasSalt   bool
-	hasNomad  bool
-	width     int
-	height    int
-	spinner   spinner.Model
+	client   *api.Client
+	database *db.DB
+	nodes    []api.Node
+	cursor   int
+	loading  bool
+	err      error
+	hasSalt  bool
+	hasNomad bool
+	width    int
+	height   int
+	spinner  spinner.Model
 	// sparkline cache: node name → []cpu ratio (last 24 points)
 	sparkData map[string][]float64
 }
@@ -161,7 +161,13 @@ func (m NodesModel) View() string {
 
 	if m.err != nil {
 		sb.WriteString(styleError.Render("  error: "+m.err.Error()) + "\n\n")
-		sb.WriteString(styleHelp.Render("  R to retry"))
+		lower := strings.ToLower(m.err.Error())
+		if strings.Contains(lower, "401") || strings.Contains(lower, "authentication failure") ||
+			strings.Contains(lower, "permission denied") {
+			sb.WriteString(styleDim.Render("  Proxmox rejected the credentials. Run `argus config` and update the") + "\n")
+			sb.WriteString(styleDim.Render("  username/password, or store a token secret from the Keys screen (?).") + "\n\n")
+		}
+		sb.WriteString(styleHelp.Render("  R retry   tab next section   H help   q quit") + "\n")
 		return sb.String()
 	}
 

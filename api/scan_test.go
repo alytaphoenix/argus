@@ -138,17 +138,17 @@ func TestPortScanSeverityMapping(t *testing.T) {
 	// Since we can't easily open port 23 (requires root), we verify the
 	// severity logic via the wellKnownService helper and the switch statement.
 	cases := []struct {
-		port     int
-		minSev   string // minimum expected severity
+		port   int
+		minSev string // minimum expected severity
 	}{
-		{23, "critical"},  // telnet
-		{21, "high"},      // ftp
-		{5900, "high"},    // vnc
-		{6379, "medium"},  // redis
-		{3389, "medium"},  // rdp
-		{2049, "medium"},  // nfs
-		{22, "info"},      // ssh (just info)
-		{80, "info"},      // http (just info)
+		{23, "critical"}, // telnet
+		{21, "high"},     // ftp
+		{5900, "high"},   // vnc
+		{6379, "medium"}, // redis
+		{3389, "medium"}, // rdp
+		{2049, "medium"}, // nfs
+		{22, "info"},     // ssh (just info)
+		{80, "info"},     // http (just info)
 	}
 	for _, c := range cases {
 		svc := wellKnownService(c.port)

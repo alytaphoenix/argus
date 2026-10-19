@@ -31,9 +31,9 @@ func NewWazuhClient(cfg config.WazuhConfig) *WazuhClient {
 	if cfg.URL == "" {
 		return nil
 	}
-	// Wazuh ships with a self-signed cert, so skip verification unless the
-	// operator explicitly sets insecure = false.
-	insecure := true
+	// Verify TLS by default. Wazuh commonly ships with a self-signed cert;
+	// operators who cannot install the CA must explicitly set insecure = true.
+	insecure := false
 	if cfg.Insecure != nil {
 		insecure = *cfg.Insecure
 	}

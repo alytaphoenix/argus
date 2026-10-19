@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a reproducible problem with argus
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do **not** include credentials, tokens, private hostnames/IPs, or
+        database files. For security issues, use SECURITY.md instead.
+  - type: input
+    id: version
+    attributes:
+      label: argus version
+      description: Output of `argus --version` or the commit SHA.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: proxmox
+    attributes:
+      label: Proxmox VE version
+      description: Output of `pveversion` (omit if not applicable).
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Press ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include sanitized error output and screenshots if useful.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: Sanitized config snippets only (remove secrets/hostnames).
+      render: toml
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I removed credentials and private data from this report.
+          required: true
+        - label: I checked existing issues for duplicates.
+          required: true

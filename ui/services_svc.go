@@ -230,7 +230,7 @@ func (m ServicesModel) saveHealthChecks(results []api.HealthResult) tea.Cmd {
 					})
 				}
 			}
-			database.RecordHealthCheck(hc)       //nolint:errcheck
+			database.RecordHealthCheck(hc)                  //nolint:errcheck
 			database.RecordServiceUptime(r.ServiceID, r.Up) //nolint:errcheck
 		}
 		svcs, _ := database.Services()
@@ -829,7 +829,7 @@ func (m ServicesModel) viewHostDialog() string {
 		} else {
 			hdr := fmt.Sprintf("  %-14s %-12s  %s\n", "Port", "Service", "Severity")
 			b.WriteString(styleSubtle.Render(hdr))
-			b.WriteString(styleDim.Render("  " + strings.Repeat("─", 50)) + "\n")
+			b.WriteString(styleDim.Render("  "+strings.Repeat("─", 50)) + "\n")
 			for _, f := range m.discFindings {
 				sev := f.Severity
 				style := styleDim

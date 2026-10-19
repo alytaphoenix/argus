@@ -89,6 +89,7 @@ type App struct {
 	alertRoutes    AlertRoutesModel
 	lifecycle      LifecycleModel
 	claudeOverlay  ClaudeOverlayModel
+	helpVisible    bool
 	appSettings    db.AppSettings
 	// lightweight badge state for nodes screen
 	mediaBadgePlex     *bool // nil=unchecked, true=online, false=offline
@@ -296,29 +297,46 @@ func sectionOf(s screenID) screenID {
 func (a App) screenCapturesTab() bool {
 	switch a.screen {
 	case screenOrchestrate:
-		return a.orch.form != nil || a.orch.provisionForm != nil || a.orch.provisionConfirm != nil || a.orch.bsvcActionDialog != nil
+		// Any open dialog/form owns tab: it must not be possible to navigate
+		// away from a confirmation (leaving it half-answered) or to steal tab
+		// from a field that uses it to move focus.
+		return a.orch.form != nil || a.orch.provisionForm != nil ||
+			a.orch.provisionConfirm != nil || a.orch.bsvcActionDialog != nil ||
+			a.orch.confirm != nil
+	case screenProvision:
+		// The whole provisioning screen is a multi-field form; tab always
+		// means "next field" here.
+		return true
+	case screenResize:
+		return a.resize.editMode || a.resize.diskMode || a.resize.confirmKind != confirmResizeNone
+	case screenGuests:
+		return a.guests.confirm != confirmNone || a.guests.bulkConfirm != ""
+	case screenDetail:
+		return a.detail.confirm != confirmNone
 	case screenProfiles:
-		return a.profiles.editing != editNone
+		return a.profiles.editing != editNone || a.profiles.confirmDelete
 	case screenCredentials:
 		return a.credentials.editing
 	case screenMetrics:
 		return a.metrics.customActive || a.metrics.lokiActive
 	case screenServices:
-		return a.services.addingSvc || a.services.addingDNS || a.services.pickingTemplate
+		return a.services.addingSvc || a.services.addingDNS || a.services.pickingTemplate ||
+			a.services.dialog != svcDialogNone || a.services.dnsConfirmDelete
 	case screenPXE:
 		return a.pxe.capturesTab()
 	case screenSecurity:
-		return a.security.scanEditing || a.security.cveEditing
+		return a.security.scanEditing || a.security.cveEditing || a.security.scanConfirm
 	case screenSettings:
 		return a.settings.editing
 	case screenMaintenance:
-		return a.maintenance.tab == maintTabConfigure && a.maintenance.wizardStep == maintWizardSchedule
+		return (a.maintenance.tab == maintTabConfigure && a.maintenance.wizardStep == maintWizardSchedule) ||
+			a.maintenance.confirmText != ""
 	case screenRunbooks:
-		return a.runbooks.editing
+		return a.runbooks.editing || a.runbooks.confirm != rbConfirmNone
 	case screenAlertRoutes:
-		return a.alertRoutes.editing
+		return a.alertRoutes.editing || a.alertRoutes.confirmDelete
 	case screenLifecycle:
-		return a.lifecycle.editing
+		return a.lifecycle.editing || a.lifecycle.confirmDelete
 	}
 	return false
 }
@@ -692,6 +710,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.claudeOverlay, oCmd = a.claudeOverlay.Update(msg)
 			return a, oCmd
 		}
+		// Help overlay: swallow everything except the close keys.
+		if a.helpVisible {
+			switch msg.String() {
+			case "H", "?", "esc", "q", "enter":
+				a.helpVisible = false
+			}
+			return a, nil
+		}
+		// H opens context-sensitive help, but only when no form/dialog owns
+		// the keyboard (otherwise H is just a character the user is typing).
+		if msg.String() == "H" && !a.screenCapturesTab() {
+			a.helpVisible = true
+			return a, nil
+		}
 		cur := sectionOf(a.screen)
 		if msg.String() == "tab" || msg.String() == "shift+tab" {
 			if !a.screenCapturesTab() {
@@ -831,12 +863,95 @@ func (a App) tabBar() string {
 		line += p
 		lineW += w
 	}
-	hint := styleDim.Render(" tab/shift+tab")
+	hint := styleDim.Render(" tab/shift+tab  H help")
 	if lineW+2+lipgloss.Width(hint) <= maxw {
 		line += "  " + hint
 	}
 	lines = append(lines, line)
 	return strings.Join(lines, "\n") + "\n" + styleDim.Render(strings.Repeat("─", maxw)) + "\n"
+}
+
+// helpLines returns the global and screen-specific key bindings shown by the
+// H help overlay. It is intentionally concise: the per-screen footer already
+// carries the most common action hints.
+func (a App) helpLines() []string {
+	lines := []string{
+		"tab / shift+tab   switch section",
+		"H                 close help",
+		"q / ctrl+c        quit",
+	}
+	switch sectionOf(a.screen) {
+	case screenNodes:
+		lines = append(lines,
+			"enter             open node guests",
+			"p                 cloud-init / salt profiles",
+			"?                 credentials (Keys screen)",
+			"R                 refresh nodes",
+		)
+		if a.saltClient != nil {
+			lines = append(lines, "m                 salt minions")
+		}
+		if a.nomadClient != nil {
+			lines = append(lines, "n                 nomad jobs")
+		}
+	case screenGuests:
+		lines = append(lines,
+			"enter             guest detail",
+			"space             select / deselect",
+			"s / S / r         start / stop / reboot selected",
+			"t                 ssh to selected guest",
+			"c                 provision a new VM",
+			"z                 right-size recommendations",
+			"R                 refresh",
+		)
+	case screenDetail:
+		lines = append(lines,
+			"s / S / r         start / stop / reboot",
+			"t                 ssh",
+			"R                 refresh",
+		)
+	case screenSalt:
+		lines = append(lines, "enter             minion detail", "a                 apply highstate", "R refresh")
+	case screenSaltDetail:
+		lines = append(lines, "a / A             highstate / custom state", "p                 pick saved salt profile")
+	case screenOrchestrate:
+		lines = append(lines,
+			"←/→ or h/l        Keys / Pending / Pillar / Bootstrap",
+			"a / r             accept / reject pending key",
+			"enter             act on selected item",
+			"x                 bootstrap: check all services",
+			"P                 bootstrap: provision all missing",
+			"s                 bootstrap: skip / apply pending VM",
+		)
+	case screenProvision:
+		lines = append(lines,
+			"tab / ↓           next field",
+			"shift+tab / ↑     previous field",
+			"enter             next field, or submit on the last field",
+			"ctrl+s            submit",
+			"ctrl+L            load cloud-init profile by name",
+			"esc               cancel",
+		)
+	case screenResize:
+		lines = append(lines,
+			"r / e / d         apply recommended / custom / disk resize",
+			"A                 apply all recommendations",
+			"?                 ask Claude for an explanation",
+			"tab / ↑↓          move between fields in a form",
+		)
+	case screenMaintenance:
+		lines = append(lines, "tabs               runs / schedules / configure", "r                 run selected schedule now")
+	case screenServices:
+		lines = append(lines, "←/→ or h/l        switch services tab", "n                 add service / DNS record where available")
+	case screenSecurity:
+		lines = append(lines, "r                 rescan ports", "u                 unban selected CrowdSec decision")
+	case screenSettings:
+		lines = append(lines, "enter             edit selected setting", "space toggle booleans")
+	case screenCredentials:
+		lines = append(lines, "enter             edit selected credential", "d                 delete per-node credential")
+	}
+	lines = append(lines, "ctrl+a            ask Claude about the current screen")
+	return lines
 }
 
 func (a App) View() string {
@@ -891,6 +1006,13 @@ func (a App) View() string {
 	view := a.tabBar() + content
 	if a.width > 0 {
 		view = lipgloss.NewStyle().MaxWidth(a.width).Render(view)
+	}
+	if a.helpVisible {
+		w := a.width
+		if w <= 0 {
+			w = 80
+		}
+		view = a.tabBar() + renderHelpOverlay("argus — key bindings", a.helpLines(), w, a.height)
 	}
 	if a.claudeOverlay.visible {
 		view = a.claudeOverlay.renderOver(view, a.width, a.height)

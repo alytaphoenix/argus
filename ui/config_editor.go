@@ -129,7 +129,7 @@ func buildCfgSections(cfg *config.Config) []cfgSection {
 		{
 			title: "Globals",
 			fields: []*cfgField{
-				strField("ssh_user", "default SSH username across all integrations", "alyta",
+				strField("ssh_user", "default SSH username across all integrations", "admin",
 					func(c *config.Config) string { return c.Globals.SSHUser },
 					func(c *config.Config, v string) { c.Globals.SSHUser = v }),
 				strField("ssh_key", "path to SSH private key (empty = use ssh-agent)", "~/.ssh/id_ed25519",
@@ -170,7 +170,7 @@ func buildCfgSections(cfg *config.Config) []cfgSection {
 				strField("ostype", "guest OS type", "l26",
 					func(c *config.Config) string { return c.Defaults.OSType },
 					func(c *config.Config, v string) { c.Defaults.OSType = v }),
-				strField("ci_user", "cloud-init username", "alyta",
+				strField("ci_user", "cloud-init username", "ubuntu",
 					func(c *config.Config) string { return c.Defaults.CIUser },
 					func(c *config.Config, v string) { c.Defaults.CIUser = v }),
 				strField("ci_ssh_key", "cloud-init public key (paste ssh-rsa / ed25519 pub key)", "",

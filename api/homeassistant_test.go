@@ -26,8 +26,8 @@ func haServer(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/api/states/light.living_room", func(w http.ResponseWriter, _ *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
-			"entity_id": "light.living_room",
-			"state":     "on",
+			"entity_id":  "light.living_room",
+			"state":      "on",
 			"attributes": map[string]any{"brightness": 255},
 		})
 	})

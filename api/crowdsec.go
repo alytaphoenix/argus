@@ -51,33 +51,33 @@ type CrowdSecAlert struct {
 	Scenario string `json:"scenario"`
 	Message  string `json:"message"`
 	Source   struct {
-		IP        string `json:"ip"`
-		Range     string `json:"range"`
-		ASName    string `json:"as_name"`
+		IP        string  `json:"ip"`
+		Range     string  `json:"range"`
+		ASName    string  `json:"as_name"`
 		Latitude  float64 `json:"latitude"`
 		Longitude float64 `json:"longitude"`
 	} `json:"source"`
-	Decisions  []CrowdSecDecision `json:"decisions"`
-	StartedAt  time.Time          `json:"start_at"`
-	StoppedAt  time.Time          `json:"stop_at"`
-	CreatedAt  time.Time          `json:"created_at"`
-	EventsCount int               `json:"events_count"`
+	Decisions   []CrowdSecDecision `json:"decisions"`
+	StartedAt   time.Time          `json:"start_at"`
+	StoppedAt   time.Time          `json:"stop_at"`
+	CreatedAt   time.Time          `json:"created_at"`
+	EventsCount int                `json:"events_count"`
 }
 
 // CrowdSecMachine is a registered machine (agent) or bouncer.
 type CrowdSecMachine struct {
-	MachineID  string    `json:"machineId"`
-	LastPush   time.Time `json:"last_push"`
-	IsValidated bool     `json:"isValidated"`
+	MachineID   string    `json:"machineId"`
+	LastPush    time.Time `json:"last_push"`
+	IsValidated bool      `json:"isValidated"`
 }
 
 // CrowdSecBouncer is a registered bouncer (enforcement component).
 type CrowdSecBouncer struct {
-	Name        string    `json:"name"`
-	IPAddress   string    `json:"ip_address"`
-	Type        string    `json:"type"`   // "firewall", "nginx", etc.
-	LastPull    time.Time `json:"last_pull"`
-	IsDisabled  bool      `json:"is_disabled"`
+	Name       string    `json:"name"`
+	IPAddress  string    `json:"ip_address"`
+	Type       string    `json:"type"` // "firewall", "nginx", etc.
+	LastPull   time.Time `json:"last_pull"`
+	IsDisabled bool      `json:"is_disabled"`
 }
 
 // CrowdSecSummary bundles counts for the TUI header.

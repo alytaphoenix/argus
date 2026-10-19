@@ -34,7 +34,7 @@ type HealthResult struct {
 	ServiceID  int64
 	Up         bool
 	LatencyMs  int64
-	StatusCode int      // HTTP/HTTPS only; 0 for TCP
+	StatusCode int       // HTTP/HTTPS only; 0 for TCP
 	CertInfo   *CertInfo // HTTPS only; nil otherwise
 	Error      string
 	CheckedAt  time.Time
@@ -59,7 +59,7 @@ func CheckAll(ctx context.Context, checks []ServiceCheck) []HealthResult {
 
 // CheckService runs a single health check.
 func CheckService(ctx context.Context, sc ServiceCheck) HealthResult {
-	res := HealthResult{ServiceID: sc.ID, CheckedAt: time.Now()}
+	var res HealthResult
 	addr := fmt.Sprintf("%s:%d", sc.Host, sc.Port)
 
 	switch sc.Scheme {
@@ -106,7 +106,7 @@ func checkHTTP(ctx context.Context, sc ServiceCheck, addr string, useTLS bool) H
 	// Use a transport that captures TLS info and doesn't follow redirects blindly.
 	var certInfo *CertInfo
 	transport := &http.Transport{
-		DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		DialContext:         (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 		TLSHandshakeTimeout: 5 * time.Second,
 	}
 	if useTLS {

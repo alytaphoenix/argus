@@ -37,7 +37,20 @@ func Open() (*DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	secureDBFiles(path)
 	return d, nil
+}
+
+// secureDBFiles restricts the SQLite database and its WAL/SHM sidecars to the
+// owner. The parent directory is already 0700, but making the files 0600 too
+// keeps profile passwords/SSH keys unreadable if the directory permissions are
+// ever loosened (e.g. by a backup or manual chmod).
+func secureDBFiles(path string) {
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(p); err == nil {
+			_ = os.Chmod(p, 0o600)
+		}
+	}
 }
 
 func (d *DB) Close() error { return d.sql.Close() }
@@ -2211,10 +2224,10 @@ func (d *DB) RecentBannedHosts(hours int) ([]string, error) {
 
 // MaintenanceTaskFlags describes which tasks a maintenance run should perform.
 type MaintenanceTaskFlags struct {
-	OSUpdates       bool `json:"os_updates"`
-	PkgUpdates      bool `json:"pkg_updates"`
-	ProxmoxUpgrade  bool `json:"proxmox_upgrade"`
-	Reboot          bool `json:"reboot"`
+	OSUpdates      bool `json:"os_updates"`
+	PkgUpdates     bool `json:"pkg_updates"`
+	ProxmoxUpgrade bool `json:"proxmox_upgrade"`
+	Reboot         bool `json:"reboot"`
 }
 
 // MaintenanceSchedule is a repeating or one-shot maintenance schedule.
@@ -2472,11 +2485,11 @@ func scanResultRows(rows *sql.Rows) ([]ScanResult, error) {
 // ── Node metrics history ─────────────────────────────────────────────────────
 
 type NodeMetricsPoint struct {
-	Node      string
-	CPURatio  float64
-	MemRatio  float64
-	MemUsedMB int64
-	MemMaxMB  int64
+	Node       string
+	CPURatio   float64
+	MemRatio   float64
+	MemUsedMB  int64
+	MemMaxMB   int64
 	RecordedAt time.Time
 }
 

@@ -45,11 +45,11 @@ func NewClaudeClient(cfg config.ClaudeConfig) *ClaudeClient {
 
 // VMResizeExplanation is what Claude returns after analysing a VM's sizing.
 type VMResizeExplanation struct {
-	Summary    string   // one-sentence headline
-	Detail     string   // full paragraph explanation
-	Changes    []string // bullet list: each proposed change as a short string
-	Caveats    []string // e.g. "reboot required", "balloon driver needed"
-	RiskLevel  string   // "low", "medium", "high"
+	Summary   string   // one-sentence headline
+	Detail    string   // full paragraph explanation
+	Changes   []string // bullet list: each proposed change as a short string
+	Caveats   []string // e.g. "reboot required", "balloon driver needed"
+	RiskLevel string   // "low", "medium", "high"
 }
 
 // sendMessage posts a single-turn message to the Anthropic Messages API and

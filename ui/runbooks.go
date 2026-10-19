@@ -376,7 +376,7 @@ func (m RunbooksModel) executeRunbookCmd(rb db.Runbook) tea.Cmd {
 				if saltClient != nil {
 					out, err := saltClient.RunCmd(ctx, step.Target, step.Command)
 					if err != nil {
-						line += " ERROR: " + err.Error()
+						line += " ERROR: " + sanitizeText(err.Error())
 						failed = true
 					} else {
 						line += " → " + truncate(strings.ReplaceAll(out, "\n", " "), 200)

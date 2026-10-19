@@ -32,17 +32,14 @@ func NewPlexClient(base, token string, insecure bool) *PlexClient {
 }
 
 func (c *PlexClient) get(ctx context.Context, path string, out interface{}) error {
-	reqURL := c.base + path
-	sep := "?"
-	if strings.Contains(path, "?") {
-		sep = "&"
-	}
-	reqURL += sep + "X-Plex-Token=" + url.QueryEscape(c.token)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
+	// Send the token as a header instead of a query parameter so it does not
+	// leak into access logs, proxy logs, or browser history.
+	req.Header.Set("X-Plex-Token", c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
@@ -67,7 +64,7 @@ type PlexServerInfo struct {
 type PlexLibrary struct {
 	Key       string `json:"key"`
 	Title     string `json:"title"`
-	Type      string `json:"type"`  // movie, show, music, photo
+	Type      string `json:"type"` // movie, show, music, photo
 	Agent     string `json:"agent"`
 	Scanner   string `json:"scanner"`
 	Language  string `json:"language"`
@@ -79,11 +76,11 @@ type PlexLibrary struct {
 
 // PlexSession is an active playback session.
 type PlexSession struct {
-	SessionKey string `json:"sessionKey"`
-	Title      string `json:"title"`
+	SessionKey       string `json:"sessionKey"`
+	Title            string `json:"title"`
 	GrandparentTitle string `json:"grandparentTitle"` // show name for episodes
-	Type       string `json:"type"`
-	User       struct {
+	Type             string `json:"type"`
+	User             struct {
 		Title string `json:"title"`
 	} `json:"User"`
 	Player struct {
@@ -91,8 +88,8 @@ type PlexSession struct {
 		State   string `json:"state"`
 		Product string `json:"product"`
 	} `json:"Player"`
-	ViewOffset     int `json:"viewOffset"`
-	Duration       int `json:"duration"`
+	ViewOffset int `json:"viewOffset"`
+	Duration   int `json:"duration"`
 }
 
 // ServerInfo returns Plex Media Server metadata.
@@ -163,12 +160,12 @@ func (c *PlexClient) AddLibrary(ctx context.Context, name, libType, path string)
 	q.Set("importFromiTunes", "")
 	q.Set("enableAutoPhotoTags", "")
 	q.Set("location", path)
-	q.Set("X-Plex-Token", c.token)
 	reqURL := c.base + "/library/sections?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, nil)
 	if err != nil {
 		return err
 	}
+	req.Header.Set("X-Plex-Token", c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
@@ -260,13 +257,13 @@ type ServarrSystemStatus struct {
 
 // ServarrQueueItem is one item in the download queue.
 type ServarrQueueItem struct {
-	Title          string  `json:"title"`
-	Status         string  `json:"status"`
-	TrackedStatus  string  `json:"trackedDownloadStatus"`
-	SizeTotal      float64 `json:"size"`
-	Sizeleft       float64 `json:"sizeleft"`
-	Timeleft       string  `json:"timeleft"`
-	Protocol       string  `json:"protocol"`
+	Title         string  `json:"title"`
+	Status        string  `json:"status"`
+	TrackedStatus string  `json:"trackedDownloadStatus"`
+	SizeTotal     float64 `json:"size"`
+	Sizeleft      float64 `json:"sizeleft"`
+	Timeleft      string  `json:"timeleft"`
+	Protocol      string  `json:"protocol"`
 }
 
 // SystemStatus returns basic app info and version.

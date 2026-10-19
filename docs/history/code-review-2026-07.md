@@ -1,4 +1,8 @@
-# Codebase Review — 2026-07-05
+# Historical codebase review — 2026-07-05
+
+> This is a historical record of an internal review. Some paths, names, and
+> defaults have changed since; use the current README and `docs/` for
+> user-facing documentation.
 
 Full review of all packages. Build, vet, and tests passed at time of review.
 **All items below were fixed in the same session** (build, vet, and full test

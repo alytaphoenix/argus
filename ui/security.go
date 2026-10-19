@@ -963,7 +963,7 @@ func (m SecurityModel) viewCrowdSec(height int) string {
 			}
 			row := fmt.Sprintf("  %-6d %-18s %-36s %-10s  %s\n",
 				d.ID, truncate(d.Value, 18), truncate(d.Scenario, 36),
-				truncate(d.Duration, 10), d.Origin)
+				truncate(d.Duration, 10), sanitizeText(d.Origin))
 			if i == m.csCursor {
 				b.WriteString(styleSelected.Render(strings.TrimRight(row, "\n")) + "\n")
 			} else {
@@ -1019,7 +1019,7 @@ func (m SecurityModel) viewWazuh(height int) string {
 		if a.Status != "active" {
 			dot = lipgloss.NewStyle().Foreground(colorRed).Render("●")
 		}
-		osStr := a.OS.Platform
+		osStr := sanitizeText(a.OS.Platform)
 		if a.OS.Name != "" {
 			osStr = truncate(a.OS.Name, 14)
 		}
@@ -1037,7 +1037,7 @@ func (m SecurityModel) viewWazuh(height int) string {
 		}
 		row := fmt.Sprintf("  %-3s  %-22s %-16s %-10s %-14s  %-16s  %s\n",
 			dot, truncate(a.Name, 22), truncate(a.IP, 16),
-			a.Status, managedBadge, osStr, truncate(a.LastKeepAlive, 20))
+			sanitizeText(a.Status), managedBadge, osStr, truncate(a.LastKeepAlive, 20))
 		if i == m.wazuhCursor {
 			b.WriteString(styleSelected.Render(strings.TrimRight(row, "\n")) + "\n")
 		} else {
@@ -1076,7 +1076,7 @@ func (m SecurityModel) viewHistory(height int) string {
 		when := fmtAge(ev.RecordedAt)
 		sevStyle := severityStyle(ev.Severity)
 		row := fmt.Sprintf("  %-10s %-10s %-10s %-20s  %s\n",
-			when, ev.Source, ev.Severity, truncate(ev.Target, 20), truncate(ev.Description, 50))
+			when, sanitizeText(ev.Source), sanitizeText(ev.Severity), truncate(ev.Target, 20), truncate(ev.Description, 50))
 		if i == m.histCursor {
 			b.WriteString(styleSelected.Render(strings.TrimRight(row, "\n")) + "\n")
 		} else {

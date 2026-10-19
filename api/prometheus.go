@@ -96,7 +96,7 @@ func (c *PrometheusClient) Query(ctx context.Context, expr string) ([]PromSample
 		Data   struct {
 			ResultType string `json:"resultType"`
 			Result     []struct {
-				Metric map[string]string `json:"metric"`
+				Metric map[string]string  `json:"metric"`
 				Value  [2]json.RawMessage `json:"value"` // [timestamp, "value"]
 			} `json:"result"`
 		} `json:"data"`
@@ -113,7 +113,7 @@ func (c *PrometheusClient) Query(ctx context.Context, expr string) ([]PromSample
 	for _, r := range resp.Data.Result {
 		var ts float64
 		var valStr string
-		json.Unmarshal(r.Value[0], &ts)   //nolint:errcheck
+		json.Unmarshal(r.Value[0], &ts)     //nolint:errcheck
 		json.Unmarshal(r.Value[1], &valStr) //nolint:errcheck
 		val, _ := strconv.ParseFloat(valStr, 64)
 		out = append(out, PromSample{
@@ -147,7 +147,7 @@ func (c *PrometheusClient) QueryRange(ctx context.Context, expr string, start, e
 		Data   struct {
 			ResultType string `json:"resultType"`
 			Result     []struct {
-				Metric map[string]string `json:"metric"`
+				Metric map[string]string    `json:"metric"`
 				Values [][2]json.RawMessage `json:"values"`
 			} `json:"result"`
 		} `json:"data"`
@@ -196,10 +196,10 @@ func (c *PrometheusClient) AlertRules(ctx context.Context) ([]PromAlertRule, err
 		Data   struct {
 			Groups []struct {
 				Rules []struct {
-					Name   string            `json:"name"`
-					State  string            `json:"state"`
-					Query  string            `json:"query"`
-					Labels map[string]string `json:"labels"`
+					Name        string            `json:"name"`
+					State       string            `json:"state"`
+					Query       string            `json:"query"`
+					Labels      map[string]string `json:"labels"`
 					Annotations map[string]string `json:"annotations"`
 				} `json:"rules"`
 			} `json:"groups"`

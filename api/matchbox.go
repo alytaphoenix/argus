@@ -36,11 +36,11 @@ func NewMatchboxClient(cfg config.MatchboxConfig) *MatchboxClient {
 
 // MatchboxProfile is a PXE boot profile (kernel + initrd + args).
 type MatchboxProfile struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	Boot        MatchboxBoot     `json:"boot"`
-	CloudConfig string           `json:"cloud_config_url,omitempty"`
-	Ignition    string           `json:"ignition_id,omitempty"`
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Boot        MatchboxBoot `json:"boot"`
+	CloudConfig string       `json:"cloud_config_url,omitempty"`
+	Ignition    string       `json:"ignition_id,omitempty"`
 }
 
 // MatchboxBoot holds the kernel/initrd/args for a profile.

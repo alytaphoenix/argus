@@ -203,8 +203,8 @@ func (c *TechnitiumClient) DeleteRecord(ctx context.Context, zone, domain, recTy
 // Ping checks whether the Technitium API is reachable.
 func (c *TechnitiumClient) Ping(ctx context.Context) error {
 	_, err := c.get(ctx, "/api/user/login", url.Values{
-		"user":     {"check"},
-		"pass":     {"check"},
+		"user":        {"check"},
+		"pass":        {"check"},
 		"includeInfo": {"false"},
 	})
 	// A 401/forbidden is still "reachable"; only network errors mean down.

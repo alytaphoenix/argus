@@ -19,13 +19,13 @@ token_id = "user@pam!argus"   # Datacenter > Permissions > API Tokens
 secret   = ""                    # leave empty — store in Keychain via Keys screen
 username = ""                    # e.g. "root@pam" for ticket auth instead of token
 password = ""                    # leave empty — store in Keychain (key: proxmox_password)
-insecure = true                  # skip TLS verify for self-signed certs
+insecure = false                 # set true only for a self-signed cert you cannot trust
 
 # Global defaults — applied across all integrations
 # These propagate to sub-sections if those fields are not already set.
 # Env vars: ARGUS_SSH_USER, ARGUS_SSH_KEY, ARGUS_DOMAIN, ARGUS_TIMEZONE
 [globals]
-ssh_user    = "alyta"        # default SSH username for all node connections
+ssh_user    = "admin"        # default SSH username for all node connections
 ssh_key     = ""             # path to SSH private key (leave empty to use ssh-agent)
 domain      = ""             # homelab domain suffix, e.g. "homelab.local"
 timezone    = "UTC"          # IANA timezone for log display (e.g. "America/New_York")
@@ -39,9 +39,9 @@ admin_email = ""             # operator email for cert SANs / notifications
 [salt]
 url           = "https://salt.yourdomain.com:8000"
 username      = "saltapi"
-password      = "yourpassword"
+password      = ""              # prefer the Keychain (salt_password) or SALT_PASSWORD
 eauth         = "pam"           # pam (default), ldap, file
-insecure      = true
+insecure      = false           # set true only for a self-signed salt-api cert
 master_minion = "salt-master"   # minion ID of the salt-master host; required for service wiring
 pillar_base   = "/srv/pillar"   # default; only set if your master uses a non-standard path
 state_base    = "/srv/salt"     # default; only set if your master uses a non-standard path
@@ -62,8 +62,8 @@ disk_gb       = 20
 storage       = "local-lvm"
 bridge        = "vmbr0"
 ostype        = "l26"
-ssh_user      = ""          # inherits globals.ssh_user ("alyta") — override here if needed
-ci_user       = "alyta"
+ssh_user      = ""          # inherits globals.ssh_user ("admin") — override here if needed
+ci_user       = "ubuntu"
 ci_ssh_key    = ""          # paste your public key here
 ci_ipconfig   = "ip=dhcp"
 nameserver    = "1.1.1.1"
@@ -91,7 +91,7 @@ api_key = ""                       # from: cscli bouncers add argus
 [truenas]
 url      = "https://truenas.yourdomain.com"
 api_key  = ""      # store in Keychain via Keys screen
-insecure = true    # skip TLS verify for self-signed certs
+insecure = false   # set true only for a self-signed cert you cannot trust
 
 # Wazuh — optional; enables the Security → Wazuh tab
 # Env vars: WAZUH_URL, WAZUH_USERNAME, WAZUH_PASSWORD
@@ -99,6 +99,9 @@ insecure = true    # skip TLS verify for self-signed certs
 url      = "https://wazuh-manager.yourdomain.com:55000"
 username = "wazuh-wui"
 password = ""
+# Wazuh often uses a self-signed certificate. Verification is on by default;
+# set this to true only if you cannot install its CA.
+# insecure = false
 
 # Claude AI — optional; enables AI-powered VM resize explanations (? key in right-sizing screen)
 # Env var: ANTHROPIC_API_KEY (preferred; avoids storing key in config file)
@@ -140,12 +143,13 @@ insecure = false
 # Prometheus / Metrics — optional
 # url    — Prometheus server to query in the Metrics screen (tab: Metrics)
 # listen — argus's own /metrics server; scrape at http://host:9099/metrics
-#          leave empty to disable
+#          leave empty to disable. Defaults to loopback; use "0.0.0.0:9099"
+#          only if a firewall or authenticated reverse proxy sits in front.
 # Env vars: PROMETHEUS_URL, PROMETHEUS_TOKEN, ARGUS_METRICS_LISTEN
 [prometheus]
 url    = "http://prometheus.yourdomain.com:9090"
 token  = ""       # Bearer token if Prometheus auth is enabled
-listen = ":9099"  # bind address for argus's own Prometheus metrics endpoint
+listen = "127.0.0.1:9099"  # loopback-only by default; no auth on this endpoint
 
 # Plex Media Server — optional; enables the Plex screen (tab: Plex)
 # token: get your X-Plex-Token from https://support.plex.tv/articles/204059436

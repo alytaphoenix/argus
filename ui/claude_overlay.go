@@ -16,17 +16,17 @@ import (
 
 // ClaudeOverlayModel is a floating overlay for natural-language homelab queries.
 type ClaudeOverlayModel struct {
-	visible  bool
-	input    textinput.Model
-	answer   string
-	err      error
-	loading  bool
-	spinner  spinner.Model
-	client   *api.ClaudeClient
-	context  string // snapshot of homelab state injected as system prompt
-	history  []string // last N Q&A pairs
-	width    int
-	height   int
+	visible bool
+	input   textinput.Model
+	answer  string
+	err     error
+	loading bool
+	spinner spinner.Model
+	client  *api.ClaudeClient
+	context string   // snapshot of homelab state injected as system prompt
+	history []string // last N Q&A pairs
+	width   int
+	height  int
 }
 
 func NewClaudeOverlay(client *api.ClaudeClient) ClaudeOverlayModel {
@@ -145,7 +145,7 @@ func (m ClaudeOverlayModel) View() string {
 	if len(m.history) > 0 {
 		content.WriteString(styleDim.Render("  Recent:\n"))
 		for _, h := range m.history {
-			content.WriteString(styleDim.Render("    " + truncate(h, inner-6)) + "\n")
+			content.WriteString(styleDim.Render("    "+truncate(h, inner-6)) + "\n")
 		}
 		content.WriteString("\n")
 	}

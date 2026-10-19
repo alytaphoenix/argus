@@ -40,6 +40,9 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
+// version is overridden by GoReleaser via -ldflags "-X main.version=...".
+var version = "dev"
+
 // ── MCP protocol types ───────────────────────────────────────────────────────
 
 type initResult struct {
@@ -1479,7 +1482,7 @@ func main() {
 			resp = ok(req.ID, initResult{
 				ProtocolVersion: "2024-11-05",
 				Capabilities:    serverCaps{Tools: map[string]any{}},
-				ServerInfo:      serverInfo{Name: "argus", Version: "1.0.0"},
+				ServerInfo:      serverInfo{Name: "argus", Version: version},
 			})
 
 		case "notifications/initialized":

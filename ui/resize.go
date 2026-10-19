@@ -425,11 +425,12 @@ func (m ResizeModel) handleConfirm(key string) (ResizeModel, tea.Cmd) {
 				return m, m.applyDiskCmd(a, disk, size)
 			}
 		}
-	default:
+	case "n", "N", "esc", "q":
 		m.confirmKind = confirmResizeNone
 		m.confirmVM = nil
 		m.notice = "cancelled"
 	}
+	// Ignore all other keys so an accidental arrow/tab can't silently cancel.
 	return m, nil
 }
 

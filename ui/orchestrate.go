@@ -355,6 +355,11 @@ func (m OrchestrateModel) applyPendingVMCmd(vm db.ProvisionedVM) tea.Cmd {
 // applySaltProfile writes the per-profile pillar (if any) to the master, then
 // applies each state in the profile to the minion. Updates the DB on success.
 func applySaltProfile(ctx context.Context, saltClient *api.SaltClient, database *db.DB, cfg config.SaltConfig, minion, profileName string, vmid int) (failedStates []string) {
+	if database == nil {
+		// Profiles and pillar live in the local DB. Without it we cannot know
+		// which states to apply, and every later DB write would panic.
+		return []string{"local database unavailable — cannot load salt profile"}
+	}
 	if cfg.PillarBase == "" {
 		cfg.PillarBase = "/srv/pillar"
 	}
@@ -375,7 +380,6 @@ func applySaltProfile(ctx context.Context, saltClient *api.SaltClient, database 
 
 	// Apply each comma-separated state sequentially.
 	allStates := strings.Join(strings.Fields(strings.ReplaceAll(profile.States, ",", " ")), ",")
-	var appliedStates []string
 	for _, state := range strings.Split(allStates, ",") {
 		state = strings.TrimSpace(state)
 		if state == "" {
@@ -404,7 +408,6 @@ func applySaltProfile(ctx context.Context, saltClient *api.SaltClient, database 
 		if !done {
 			failedStates = append(failedStates, state+": timed out")
 		}
-		appliedStates = append(appliedStates, state)
 	}
 
 	success := len(failedStates) == 0
@@ -438,6 +441,9 @@ func (m OrchestrateModel) pushClusterPillarCmd() tea.Cmd {
 		if saltClient == nil {
 			return orchPillarPushedMsg{err: fmt.Errorf("Salt not configured")}
 		}
+		if database == nil {
+			return orchPillarPushedMsg{err: fmt.Errorf("database unavailable")}
+		}
 		if saltCfg.MasterMinion == "" {
 			return orchPillarPushedMsg{err: fmt.Errorf("master_minion not set in [salt] config")}
 		}
@@ -461,6 +467,9 @@ func (m OrchestrateModel) syncTrueNASCmd() tea.Cmd {
 	return func() tea.Msg {
 		if truenas == nil {
 			return orchTrueNASSyncedMsg{err: fmt.Errorf("TrueNAS not configured")}
+		}
+		if database == nil {
+			return orchTrueNASSyncedMsg{err: fmt.Errorf("database unavailable")}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -869,8 +878,8 @@ func (m OrchestrateModel) ingestSvcCmd(id string) tea.Cmd {
 			return orchSvcIngestDoneMsg{id: id, notice: "step-ca wired as managed service"}
 
 		case "truenas":
-			if truenas == nil {
-				return orchSvcIngestDoneMsg{id: id, err: fmt.Errorf("truenas client unavailable")}
+			if truenas == nil || database == nil {
+				return orchSvcIngestDoneMsg{id: id, err: fmt.Errorf("truenas client or database unavailable")}
 			}
 			status, err := truenas.FetchAll(ctx)
 			if err != nil {
@@ -1235,13 +1244,17 @@ func (m OrchestrateModel) handleKey(msg tea.KeyMsg) (OrchestrateModel, tea.Cmd) 
 		return m.handlePillarForm(msg)
 	}
 
-	// Confirmation dialog (key accept/reject).
+	// Confirmation dialog (key accept/reject/delete pillar).
 	if m.confirm != nil {
 		switch msg.String() {
 		case "y", "Y", "enter":
 			c := m.confirm
 			if c.action == "delete_pillar" {
 				m.confirm = nil
+				if m.database == nil {
+					m.err = fmt.Errorf("database unavailable")
+					return m, nil
+				}
 				if err := m.database.DeleteClusterPillarKey(c.pillarKey); err != nil {
 					m.err = err
 				} else {
@@ -1257,9 +1270,11 @@ func (m OrchestrateModel) handleKey(msg tea.KeyMsg) (OrchestrateModel, tea.Cmd) 
 			}
 			m.acting = true
 			return m, m.applyKeyActionCmd(c.action, c.minion, c.profile, c.vmid)
-		default:
+		case "n", "N", "esc":
 			m.confirm = nil
 		}
+		// Ignore every other key while a confirmation is open. Previously a
+		// stray arrow/tab press silently cancelled it.
 		return m, nil
 	}
 
@@ -1715,9 +1730,9 @@ func (m OrchestrateModel) View() string {
 
 	var status string
 	if m.err != nil {
-		status = styleError.Render("✗ " + m.err.Error())
+		status = styleError.Render("✗ " + sanitizeText(m.err.Error()))
 	} else if m.notice != "" {
-		status = styleRunning.Render("✓ " + m.notice)
+		status = styleRunning.Render("✓ " + sanitizeText(m.notice))
 	}
 	if m.acting {
 		status = m.spinner.View() + " " + styleDim.Render(m.notice)
@@ -1978,9 +1993,9 @@ func (m OrchestrateModel) viewBootstrap() string {
 		if svc.provisioning || svc.ingesting {
 			statusLabel = m.spinner.View()
 		}
-		detail := svc.detail
+		detail := sanitizeText(svc.detail)
 		if svc.errMsg != "" {
-			detail = styleError.Render(svc.errMsg)
+			detail = styleError.Render(sanitizeText(svc.errMsg))
 		}
 		if dep, isBlocked := blocked[svc.id]; isBlocked && svc.status == bsvcUnknown {
 			detail = styleDim.Render("needs " + dep + " first")
@@ -2005,7 +2020,7 @@ func (m OrchestrateModel) viewBootstrapActionDialog() string {
 	var sb strings.Builder
 	sb.WriteString(styleBold.Render("Action: "+svc.name) + " — " + styleDim.Render(svc.detail) + "\n")
 	if d.detail != "" {
-		sb.WriteString(styleDim.Render("⚠  "+d.detail) + "\n")
+		sb.WriteString(styleDim.Render("⚠  "+sanitizeText(d.detail)) + "\n")
 	}
 	sb.WriteString("\n")
 	for i, opt := range d.opts {

@@ -1,0 +1,25 @@
+# Local build artifacts
+/argus
+/argus-metrics-server
+/argus-mcp-server
+/dist/
+
+# Installer/editor backups
+*.bak.*
+*.tmp
+
+# Local state and secrets
+.env
+.env.*
+*.db
+*.db-wal
+*.db-shm
+coverage.out
+profile.out
+
+# Agent/editor local state
+.claude/
+.serena/
+.DS_Store
+.idea/
+.vscode/

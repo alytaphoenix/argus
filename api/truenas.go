@@ -82,7 +82,7 @@ func (c *TrueNASClient) get(ctx context.Context, path string, out interface{}) e
 type TrueNASPool struct {
 	ID        int    `json:"id"`
 	Name      string `json:"name"`
-	Status    string `json:"status"`   // "ONLINE", "DEGRADED", "OFFLINE", "FAULTED"
+	Status    string `json:"status"` // "ONLINE", "DEGRADED", "OFFLINE", "FAULTED"
 	Healthy   bool   `json:"healthy"`
 	Size      int64  `json:"size"`
 	Allocated int64  `json:"allocated"`
@@ -92,9 +92,9 @@ type TrueNASPool struct {
 
 // TrueNASDataset is a top-level ZFS dataset (pool root).
 type TrueNASDataset struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	UsedBytes int64  // parsed from used.parsed
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	UsedBytes  int64  // parsed from used.parsed
 	AvailBytes int64  // parsed from available.parsed
 }
 

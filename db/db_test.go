@@ -2,6 +2,9 @@ package db
 
 import (
 	"database/sql"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -169,7 +172,7 @@ func TestCloudInitProfileCRUD(t *testing.T) {
 
 	p := CloudInitProfile{
 		Name:         "ubuntu-base",
-		CIUser:       "alyta",
+		CIUser:       "testuser",
 		CISSHKey:     "ssh-ed25519 AAAA...",
 		CIIPConfig:   "ip=dhcp",
 		Nameserver:   "1.1.1.1",
@@ -193,8 +196,8 @@ func TestCloudInitProfileCRUD(t *testing.T) {
 	if profiles[0].Name != "ubuntu-base" {
 		t.Errorf("Name = %q, want ubuntu-base", profiles[0].Name)
 	}
-	if profiles[0].CIUser != "alyta" {
-		t.Errorf("CIUser = %q, want alyta", profiles[0].CIUser)
+	if profiles[0].CIUser != "testuser" {
+		t.Errorf("CIUser = %q, want testuser", profiles[0].CIUser)
 	}
 
 	// Get by name
@@ -244,10 +247,10 @@ func TestProvisionedVMCRUD(t *testing.T) {
 	db := openTestDB(t)
 
 	vm := ProvisionedVM{
-		VMID:  1001,
-		Name:  "test-vm",
-		Node:  "pve1",
-		VMIP:  "192.168.1.100",
+		VMID:   1001,
+		Name:   "test-vm",
+		Node:   "pve1",
+		VMIP:   "192.168.1.100",
 		VMType: "qemu",
 	}
 
@@ -850,7 +853,7 @@ func TestServiceUptime(t *testing.T) {
 
 	// 3 up, 1 down → 75%
 	for i := 0; i < 3; i++ {
-		d.RecordServiceUptime(svcID, true)  //nolint:errcheck
+		d.RecordServiceUptime(svcID, true) //nolint:errcheck
 	}
 	d.RecordServiceUptime(svcID, false) //nolint:errcheck
 
@@ -1242,6 +1245,29 @@ func TestSaltProfilePillarYAML(t *testing.T) {
 	got2, _ := d.GetSaltProfile("webserver")
 	if got2.PillarYAML != "nginx_port: 80\n" {
 		t.Errorf("after update PillarYAML: %q", got2.PillarYAML)
+	}
+}
+
+func TestSecureDBFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file modes")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "argus.db")
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	secureDBFiles(path)
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s mode = %o, want 600", filepath.Base(p), got)
+		}
 	}
 }
 

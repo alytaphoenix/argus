@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -277,13 +276,7 @@ func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 		if user == "" {
 			user = "root"
 		}
-		host := user + "@" + msg.ip
-		var cmd *exec.Cmd
-		if m.sshPassword != "" {
-			cmd = exec.Command("sshpass", "-p", m.sshPassword, "ssh", "-o", "StrictHostKeyChecking=no", host)
-		} else {
-			cmd = exec.Command("ssh", "-o", "StrictHostKeyChecking=no", host)
-		}
+		cmd := sshCommand(user, msg.ip, m.sshPassword)
 		return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 			return sshDoneMsg{err}
 		})
@@ -676,7 +669,7 @@ func (m DetailModel) viewSnapshots() string {
 		if desc == "" {
 			desc = styleDim.Render("(no description)")
 		}
-		sb.WriteString(fmt.Sprintf("%s%-20s  %s  %s\n", prefix, s.Name, ts, desc))
+		sb.WriteString(fmt.Sprintf("%s%-20s  %s  %s\n", prefix, sanitizeText(s.Name), ts, sanitizeText(desc)))
 	}
 	return sb.String()
 }
@@ -709,7 +702,7 @@ func (m DetailModel) viewBackups() string {
 		if idx := strings.LastIndex(volid, "/"); idx >= 0 {
 			volid = volid[idx+1:]
 		}
-		sb.WriteString(fmt.Sprintf("  %-40s  %s  %s  %s\n", truncate(volid, 40), ts, size, notes))
+		sb.WriteString(fmt.Sprintf("  %-40s  %s  %s  %s\n", truncate(volid, 40), ts, size, sanitizeText(notes)))
 	}
 	return sb.String()
 }

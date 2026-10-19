@@ -19,11 +19,15 @@ import (
 	"github.com/alytaphoenix/argus/ui"
 )
 
+// version is overridden by GoReleaser via -ldflags "-X main.version=...".
+var version = "dev"
+
 const usage = `argus — Bubble Tea TUI for managing a Proxmox homelab
 
 Usage:
   argus              Launch the TUI (first-run setup runs automatically if unconfigured)
   argus config       Launch the interactive config editor
+  argus --version    Print the version
   argus --help       Show this help
 
 Config file: ~/.config/argus/config.toml (override with the ARGUS_CONFIG env var)
@@ -34,6 +38,9 @@ func main() {
 		switch os.Args[1] {
 		case "-h", "--help", "help":
 			fmt.Println(usage)
+			os.Exit(0)
+		case "-v", "--version", "version":
+			fmt.Println("argus " + version)
 			os.Exit(0)
 		case "config":
 			runConfigEditor()
@@ -123,7 +130,7 @@ func main() {
 		hermesClient = api.NewHermesClient(cfg.Hermes.URL, cfg.Hermes.APIKey, cfg.Hermes.Insecure)
 	}
 
-	// cfg.Globals.SSHUser is always populated by ApplyGlobals (default "alyta").
+	// cfg.Globals.SSHUser is always populated by ApplyGlobals (local username).
 	// cfg.Defaults.SSHUser mirrors it unless explicitly set to something else.
 	sshUser := cfg.Globals.SSHUser
 
@@ -214,11 +221,13 @@ func embeddedServerLogger() *log.Logger {
 		return log.New(io.Discard, "", 0)
 	}
 	dir := filepath.Join(home, ".config", "argus")
-	_ = os.MkdirAll(dir, 0o755)
-	f, err := os.OpenFile(filepath.Join(dir, "argus.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	_ = os.MkdirAll(dir, 0o700)
+	logPath := filepath.Join(dir, "argus.log")
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return log.New(io.Discard, "", 0)
 	}
+	_ = f.Chmod(0o600)
 	return log.New(f, "", log.LstdFlags)
 }
 
@@ -247,10 +256,13 @@ func startMetricsServer(listen string, database *db.DB, cfg *config.Config, logg
 
 	logger.Printf("argus metrics listening on %s/metrics", listen)
 	srv := &http.Server{
-		Addr:         listen,
-		Handler:      mux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		Addr:              listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 	return srv.ListenAndServe()
 }

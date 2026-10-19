@@ -13,6 +13,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -22,7 +23,22 @@ import (
 	"github.com/alytaphoenix/argus/db"
 )
 
+// version is overridden by GoReleaser via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-h", "--help", "help":
+			fmt.Println("argus-metrics-server " + version)
+			fmt.Println("Reads the argus config (ARGUS_CONFIG) and serves /metrics, /healthz, /scrape-config.")
+			return
+		case "-v", "--version", "version":
+			fmt.Println("argus-metrics-server " + version)
+			return
+		}
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
@@ -31,7 +47,10 @@ func main() {
 
 	listen := cfg.Prometheus.Listen
 	if listen == "" {
-		listen = ":9099"
+		// Secure default: expose metrics only on loopback. Remote scraping
+		// requires an explicit listen = "0.0.0.0:9099" (and a firewall or
+		// authenticated reverse proxy in front of it).
+		listen = "127.0.0.1:9099"
 	}
 
 	database, err := db.Open()
@@ -66,7 +85,16 @@ func main() {
 	log.Printf("argus metrics server listening on %s", listen)
 	log.Printf("  /metrics       — Prometheus scrape endpoint")
 	log.Printf("  /scrape-config — Generated prometheus.yml snippet")
-	if err := http.ListenAndServe(listen, mux); err != nil {
+	srv := &http.Server{
+		Addr:              listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -157,6 +185,22 @@ func writeMetrics(w http.ResponseWriter, s *db.MetricsSnapshot) {
 		nil, float64(s.ComputedAt.Unix()))
 }
 
+// scrapeTarget turns a listen address into a Prometheus target. Wildcard and
+// loopback binds are rendered as localhost; explicit hosts are preserved.
+func scrapeTarget(listen string) string {
+	if strings.HasPrefix(listen, ":") {
+		return "localhost" + listen
+	}
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return listen
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		host = "localhost"
+	}
+	return net.JoinHostPort(host, port)
+}
+
 // generateScrapeConfig builds a prometheus.yml scrape_configs snippet for all
 // services that argus knows about.
 func generateScrapeConfig(cfg *config.Config) string {
@@ -172,12 +216,9 @@ func generateScrapeConfig(cfg *config.Config) string {
 	// ── Argus metrics server ─────────────────────────────────────────────
 	listen := cfg.Prometheus.Listen
 	if listen == "" {
-		listen = ":9099"
+		listen = "127.0.0.1:9099"
 	}
-	host := "localhost" + listen
-	if strings.HasPrefix(listen, ":") {
-		host = "localhost" + listen
-	}
+	host := scrapeTarget(listen)
 	sb.WriteString("  # Argus homelab metrics (provisioned VMs, salt apply stats, nomad job history)\n")
 	sb.WriteString("  - job_name: argus\n")
 	sb.WriteString("    static_configs:\n")

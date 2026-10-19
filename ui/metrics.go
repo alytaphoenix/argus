@@ -20,13 +20,13 @@ import (
 type metricsTab int
 
 const (
-	metricsTabOverview    metricsTab = iota // always from DB
-	metricsTabProxmox                       // pve-exporter via Prometheus
-	metricsTabNomad                         // Nomad native + Prometheus
-	metricsTabSalt                          // argus DB + Prometheus
-	metricsTabAlerts                        // Prometheus alerting rules
-	metricsTabScrapeConfig                  // generated YAML
-	metricsTabLoki                          // Grafana Loki log browser
+	metricsTabOverview     metricsTab = iota // always from DB
+	metricsTabProxmox                        // pve-exporter via Prometheus
+	metricsTabNomad                          // Nomad native + Prometheus
+	metricsTabSalt                           // argus DB + Prometheus
+	metricsTabAlerts                         // Prometheus alerting rules
+	metricsTabScrapeConfig                   // generated YAML
+	metricsTabLoki                           // Grafana Loki log browser
 )
 
 const metricsTabCount = int(metricsTabLoki) + 1
@@ -35,7 +35,7 @@ const metricsTabCount = int(metricsTabLoki) + 1
 type promQueryDef struct {
 	name string
 	expr string
-	unit string // "%", "MiB", "cores", "", etc.
+	unit string  // "%", "MiB", "cores", "", etc.
 	max  float64 // denominator for the progress bar; 0 = auto-scale
 }
 
@@ -827,7 +827,7 @@ func (m MetricsModel) alertsView() string {
 		}
 		line := fmt.Sprintf("  %-30s %-10s %-10s  %s",
 			truncate(r.Name, 30),
-			stateStyle.Render(r.State),
+			stateStyle.Render(sanitizeText(r.State)),
 			truncate(r.Severity, 10),
 			truncate(r.Summary, 60))
 		sb.WriteString(line + "\n")

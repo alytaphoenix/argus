@@ -120,14 +120,14 @@ type RRDStat struct {
 
 // rrdRaw mirrors the JSON shape of each RRD data point.
 type rrdRaw struct {
-	Time    float64  `json:"time"`
-	CPU     *float64 `json:"cpu"`
-	Mem     *float64 `json:"mem"`
-	MaxMem  *float64 `json:"maxmem"`
-	DiskRd  *float64 `json:"diskread"`
-	DiskWr  *float64 `json:"diskwrite"`
-	NetIn   *float64 `json:"netin"`
-	NetOut  *float64 `json:"netout"`
+	Time   float64  `json:"time"`
+	CPU    *float64 `json:"cpu"`
+	Mem    *float64 `json:"mem"`
+	MaxMem *float64 `json:"maxmem"`
+	DiskRd *float64 `json:"diskread"`
+	DiskWr *float64 `json:"diskwrite"`
+	NetIn  *float64 `json:"netin"`
+	NetOut *float64 `json:"netout"`
 }
 
 // VMRRDData fetches Proxmox RRD statistics for a VM.
@@ -242,12 +242,12 @@ func (a VMSizingAnalysis) OverallStatus() SizingStatus {
 // AnalyzeUsage derives sizing recommendations from one week of RRD data.
 func AnalyzeUsage(guest Guest, cfg VMConfig, rrd []RRDStat) VMSizingAnalysis {
 	a := VMSizingAnalysis{
-		Guest:      guest,
-		Config:     cfg,
-		CPUStatus:  StatusNoData,
-		MemStatus:  StatusNoData,
-		RecCores:   cfg.TotalCores(),
-		RecMemMB:   cfg.Memory,
+		Guest:     guest,
+		Config:    cfg,
+		CPUStatus: StatusNoData,
+		MemStatus: StatusNoData,
+		RecCores:  cfg.TotalCores(),
+		RecMemMB:  cfg.Memory,
 	}
 
 	// Disk usage from live guest stats.

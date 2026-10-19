@@ -14,7 +14,7 @@ import (
 type CloneOptions struct {
 	SourceNode string
 	SourceVMID int
-	NewVMID    int    // 0 = use NextVMID
+	NewVMID    int // 0 = use NextVMID
 	Name       string
 	TargetNode string // empty = same as source node
 	Storage    string // empty = same as source storage

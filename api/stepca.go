@@ -10,6 +10,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/alytaphoenix/argus/config"
@@ -21,6 +24,14 @@ type StepCAClient struct {
 	base        string
 	fingerprint string
 	http        *http.Client
+
+	// The root certificate is fetched once (insecure), verified against the
+	// configured SHA-256 fingerprint, then used as the RootCAs for every
+	// subsequent request. This turns the fingerprint into a real trust anchor
+	// instead of merely disabling TLS verification.
+	mu     sync.Mutex
+	pinned bool
+	root   *CertInfo
 }
 
 // NewStepCAClient creates a client. Returns nil if URL is empty.
@@ -28,19 +39,73 @@ func NewStepCAClient(cfg config.StepCAConfig) *StepCAClient {
 	if cfg.URL == "" {
 		return nil
 	}
-	// step-ca typically uses self-signed TLS; skip verify if fingerprint is set
-	// (the fingerprint itself is the trust anchor)
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.Fingerprint != ""},
+	transport := &http.Transport{}
+	if cfg.Fingerprint != "" {
+		// First fetch is unauthenticated so we can obtain the CA root; it is
+		// immediately checked against the fingerprint and replaced with a
+		// pinned RootCAs pool before any other request is made.
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 	}
 	return &StepCAClient{
-		base:        cfg.URL,
-		fingerprint: cfg.Fingerprint,
+		base:        strings.TrimRight(cfg.URL, "/"),
+		fingerprint: utilNormalizeFingerprint(cfg.Fingerprint),
 		http: &http.Client{
 			Timeout:   10 * time.Second,
 			Transport: transport,
 		},
 	}
+}
+
+func utilNormalizeFingerprint(fp string) string {
+	fp = strings.ToLower(strings.TrimSpace(fp))
+	fp = strings.ReplaceAll(fp, ":", "")
+	return fp
+}
+
+// ensurePinnedRoot fetches the CA root once, verifies its SHA-256 fingerprint,
+// and installs it as the trust anchor for subsequent TLS requests.
+func (c *StepCAClient) ensurePinnedRoot(ctx context.Context) error {
+	if c.fingerprint == "" {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pinned {
+		return nil
+	}
+
+	// Prefer the fingerprint-scoped endpoint; fall back to /root for step-ca
+	// versions that always serve the root at the unqualified path.
+	paths := []string{"/root/" + url.PathEscape(c.fingerprint), "/root"}
+	var lastErr error
+	for _, p := range paths {
+		pemBytes, info, err := c.fetchRootAt(ctx, p)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if utilNormalizeFingerprint(info.Fingerprint) != c.fingerprint {
+			return fmt.Errorf("stepca root fingerprint mismatch: got %s, want %s", info.Fingerprint, c.fingerprint)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pemBytes) {
+			return fmt.Errorf("stepca: invalid root certificate PEM")
+		}
+		tr, ok := c.http.Transport.(*http.Transport)
+		if !ok {
+			return fmt.Errorf("stepca: unsupported transport")
+		}
+		tr.TLSClientConfig = &tls.Config{RootCAs: pool}
+		// Drop any idle connection created with the unpinned TLS config.
+		tr.CloseIdleConnections()
+		c.pinned = true
+		c.root = info
+		return nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("stepca: root certificate unavailable")
+	}
+	return lastErr
 }
 
 // StepCAHealth is the parsed response from GET /health.
@@ -79,6 +144,9 @@ func (c CertInfo) ExpiryStatus() string {
 
 // Health checks if the step-ca server is reachable (GET /health).
 func (c *StepCAClient) Health(ctx context.Context) (*StepCAHealth, error) {
+	if err := c.ensurePinnedRoot(ctx); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/health", nil)
 	if err != nil {
 		return nil, err
@@ -104,39 +172,52 @@ func (c *StepCAClient) Health(ctx context.Context) (*StepCAHealth, error) {
 // RootCert retrieves the CA root certificate from step-ca (/root).
 // step-ca returns a PEM-encoded certificate.
 func (c *StepCAClient) RootCert(ctx context.Context) (*CertInfo, error) {
-	// step-ca v1 API: GET /root/{fingerprint} or just GET /root
-	url := c.base + "/root"
 	if c.fingerprint != "" {
-		url = c.base + "/root/" + c.fingerprint
+		if err := c.ensurePinnedRoot(ctx); err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		root := c.root
+		c.mu.Unlock()
+		return root, nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	_, info, err := c.fetchRootAt(ctx, "/root")
+	return info, err
+}
+
+// fetchRootAt fetches and parses the CA root at path. Callers that pin a
+// fingerprint must verify the returned CertInfo before trusting it.
+func (c *StepCAClient) fetchRootAt(ctx context.Context, path string) ([]byte, *CertInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("stepca root: HTTP %s: %s", resp.Status, truncateBody(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if resp.StatusCode >= 400 {
+		return nil, nil, fmt.Errorf("stepca root: HTTP %s: %s", resp.Status, truncateBody(body))
 	}
 
-	// Response may be JSON {"ca": "<PEM>"} or raw PEM
+	// Response may be JSON {"ca": "<PEM>"} or raw PEM.
 	var wrapper struct {
 		CA string `json:"ca"`
 	}
 	if json.Unmarshal(body, &wrapper) == nil && wrapper.CA != "" {
-		return parseCertPEM([]byte(wrapper.CA))
+		body = []byte(wrapper.CA)
 	}
-	return parseCertPEM(body)
+	info, err := parseCertPEM(body)
+	if err != nil {
+		return nil, nil, err
+	}
+	return body, info, nil
 }
 
 // Ping returns nil if the step-ca server responds to /health.
@@ -170,12 +251,12 @@ func certToInfo(cert *x509.Certificate) *CertInfo {
 	sum := sha256.Sum256(cert.Raw)
 	fp := fmt.Sprintf("%x", sum[:])
 	return &CertInfo{
-		CommonName: cert.Subject.CommonName,
-		DNSNames:   cert.DNSNames,
-		Issuer:     cert.Issuer.CommonName,
-		Serial:     cert.SerialNumber.String(),
-		NotBefore:  cert.NotBefore,
-		NotAfter:   cert.NotAfter,
+		CommonName:  cert.Subject.CommonName,
+		DNSNames:    cert.DNSNames,
+		Issuer:      cert.Issuer.CommonName,
+		Serial:      cert.SerialNumber.String(),
+		NotBefore:   cert.NotBefore,
+		NotAfter:    cert.NotAfter,
 		Fingerprint: fp,
 	}
 }

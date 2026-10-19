@@ -469,9 +469,9 @@ func (m PlexModel) viewStatus(height int) string {
 
 	info := m.plexStatus.Info
 	if info != nil {
-		b.WriteString(fmt.Sprintf("  %-16s %s\n", styleDim.Render("Server:"), info.FriendlyName))
-		b.WriteString(fmt.Sprintf("  %-16s %s\n", styleDim.Render("Version:"), info.Version))
-		b.WriteString(fmt.Sprintf("  %-16s %s %s\n", styleDim.Render("Platform:"), info.Platform, info.PlatformVersion))
+		b.WriteString(fmt.Sprintf("  %-16s %s\n", styleDim.Render("Server:"), sanitizeText(info.FriendlyName)))
+		b.WriteString(fmt.Sprintf("  %-16s %s\n", styleDim.Render("Version:"), sanitizeText(info.Version)))
+		b.WriteString(fmt.Sprintf("  %-16s %s %s\n", styleDim.Render("Platform:"), sanitizeText(info.Platform), sanitizeText(info.PlatformVersion)))
 		b.WriteString("\n")
 	}
 
@@ -498,7 +498,7 @@ func (m PlexModel) viewStatus(height int) string {
 			}
 			row := fmt.Sprintf("  ▶   %-30s %-16s %-10s  %s%s\n",
 				truncate(title, 30), truncate(s.User.Title, 16),
-				truncate(s.Player.Product, 10), s.Player.State, progress)
+				truncate(s.Player.Product, 10), sanitizeText(s.Player.State), progress)
 			b.WriteString(lipgloss.NewStyle().Foreground(colorGreen).Render(strings.TrimRight(row, "\n")) + "\n")
 		}
 	}
@@ -546,7 +546,7 @@ func (m PlexModel) viewLibraries(height int) string {
 			loc = lib.Locations[0].Path
 		}
 		row := fmt.Sprintf("  %-30s %-10s %-8d  %s\n",
-			truncate(lib.Title, 30), lib.Type, lib.Count, truncate(loc, 35))
+			truncate(lib.Title, 30), sanitizeText(lib.Type), lib.Count, truncate(loc, 35))
 		if i == m.libCursor {
 			b.WriteString(styleSelected.Render(strings.TrimRight(row, "\n")) + "\n")
 		} else {
@@ -587,7 +587,7 @@ func (m PlexModel) viewServices(height int) string {
 				dot = lipgloss.NewStyle().Foreground(colorGreen).Render("●")
 				statusStr = lipgloss.NewStyle().Foreground(colorGreen).Render("online")
 				if svc.Status != nil && svc.Status.Status != nil {
-					statusStr += styleDim.Render(" v" + svc.Status.Status.Version)
+					statusStr += styleDim.Render(" v" + sanitizeText(svc.Status.Status.Version))
 				}
 				if svc.Status != nil && len(svc.Status.Health) > 0 {
 					statusStr += lipgloss.NewStyle().Foreground(colorYellow).Render(

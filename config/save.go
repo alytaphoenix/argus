@@ -44,14 +44,14 @@ func renderConfig(cfg *Config) string {
 
 	// ── Globals ─────────────────────────────────────────────────────────────────
 	g := cfg.Globals
-	hasGlobals := (g.SSHUser != "" && g.SSHUser != "alyta") ||
+	hasGlobals := (g.SSHUser != "" && g.SSHUser != defaultSSHUser()) ||
 		g.SSHKey != "" ||
 		g.Domain != "" ||
 		(g.Timezone != "" && g.Timezone != "UTC") ||
 		g.AdminEmail != ""
 	if hasGlobals {
 		fmt.Fprint(&b, "\n[globals]\n")
-		if g.SSHUser != "" && g.SSHUser != "alyta" {
+		if g.SSHUser != "" && g.SSHUser != defaultSSHUser() {
 			writeStr(&b, "ssh_user", g.SSHUser)
 		}
 		writeStr(&b, "ssh_key", g.SSHKey)

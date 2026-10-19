@@ -1,20 +1,39 @@
 # CLAUDE.md
 
+> This file is guidance for AI coding agents (Claude Code and similar). Human
+> users and contributors should start with [README.md](README.md) and
+> [docs/](docs/).
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands
 
 ```bash
 go run .                # run without building
-go build -o argus .  # build binary
-make build
+go build -o argus .     # build binary
+make build              # build all targets individually: build-metrics/build-mcp
 make run
-go vet ./...            # lint
-go test ./...           # run all tests
+make fmt                # gofmt -w .
+go vet ./...            # static analysis
+make test               # all tests
+make test-race          # race detector
 go test ./api/...       # test API clients only
 go test ./db/...        # test database layer only
-go build ./cmd/mcp-server/...  # build MCP server
+make lint               # staticcheck (see staticcheck.conf)
+make vuln               # govulncheck
+make check              # vet + test + lint + vuln
+go build ./cmd/mcp-server/...
+make dist-linux         # linux/amd64 binaries in dist/linux-amd64
 ```
+
+`scripts/bootstrap-pve.sh` is the idempotent Proxmox-host installer. It copies
+the three binaries, creates `/etc/argus/config.toml` only when absent, and
+manages only the `argus-metrics` systemd unit. Without `--token` it must never
+touch `/etc/pve`, guests, storage, networking, or Proxmox services. `--token`
+only adds `root@pam!argus` to `/etc/pve/priv/token.cfg` and writes the secret
+to the 0600 config; it never removes users, tokens, guests or storage. Keep
+those guarantees when editing it. `--dry-run`, `--no-systemd`, `--prefix`,
+`--config-dir` and `--state-dir` exist for safe testing.
 
 ## Architecture
 
@@ -43,7 +62,7 @@ Bubble Tea TUI for managing a Proxmox homelab. Integrates Proxmox, Salt, Nomad, 
 13. `Alerts` — alert routing rules (CrowdSec/Wazuh events → webhooks)
 14. `Lifecycle` — VM lifecycle policies (stop/snapshot long-running tagged VMs)
 15. `Settings` — DB-backed configurable thresholds and timeouts
-16. `Keys` — macOS Keychain credential manager
+16. `Keys` — OS keychain credential manager
 
 Scheduled maintenance runs and due schedules are fired by a once-a-minute
 scheduler tick in `ui/app.go` (`schedulerTickCmd` → `runDueSchedulesCmd`),
@@ -80,7 +99,7 @@ independent of which screen is open.
 - `ui/services_ha.go` — Home Assistant tab (entity list, lazy-loaded on first visit).
 - `ui/orchestrate.go` — Salt orchestrator screen (4 tabs: Keys/Pending/Pillar/Bootstrap). Keys tab: live pending key queue from wheel API, `a`=accept, `r`=reject (both require confirmation). Pending tab: provisioned VMs with `salt_profile` but no `salt_applied_at`; `s`=apply states now. Pillar tab: cluster_pillar CRUD, `t`=sync TrueNAS datasets, `p`=push YAML to `<pillar_base>/argus_cluster.sls`, `n`=new manual entry, `d`=delete. Bootstrap tab: live service check grid for DNS/certs/TrueNAS/Plex/Servarr/Hermes/Signal; `x`=check all, `enter`=action dialog (wire up existing / provision missing via Salt / reprovision partial), `s`=skip. Provision prompts for target minion + Salt state, then runs `state.apply` and re-checks. Wire-up ingests service config into cluster_pillar and service_hosts. Key acceptance auto-applies the matched salt profile: writes per-profile pillar then applies each comma-separated state sequentially, polling for completion.
 - `db/db.go` — SQLite WAL mode. Migrations run as sequential `CREATE TABLE IF NOT EXISTS` / `ALTER` blocks at open (not strictly version-ordered in source); the destructive v16 certificates rebuild is guarded by `PRAGMA user_version`. Tables: `cloud_init_profiles`, `salt_profiles` (+ v17 `pillar_yaml` column), `provisioned_vms`, `salt_apply_events`, `nomad_job_snapshots`, `nomad_job_events`, `services`, `service_health_checks`, `certificates`, `dns_records_cache`, `vm_resize_events`, `pxe_profiles`, `pxe_groups`, `pxe_boot_events`, `security_events`, `service_hosts`, `node_ssh_credentials`, `scan_results`, `app_settings`, `node_metrics_history`, `service_uptime_events`, `runbooks`, `runbook_runs`, `alert_routes`, `vm_lifecycle_policies`, `maintenance_schedules`, `maintenance_runs`, `maintenance_run_steps`, `cluster_pillar` (v17: key, value, source, updated_at).
-- `keyring/` — macOS Keychain via `github.com/zalando/go-keyring`. Keys: `proxmox_secret`, `proxmox_password`, `salt_password`, `nomad_token`, `ssh_password`, `wazuh_password`, `crowdsec_api_key`, `matchbox_token`, `technitium_token`, `prometheus_token`, `anthropic_api_key`, `truenas_api_key`, `plex_token`, `homeassistant_token`, `loki_token`, `hermes_api_key`.
+- `keyring/` — OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager) via `github.com/zalando/go-keyring`. Keys: `proxmox_secret`, `proxmox_password`, `salt_password`, `nomad_token`, `ssh_password`, `wazuh_password`, `crowdsec_api_key`, `matchbox_token`, `technitium_token`, `prometheus_token`, `anthropic_api_key`, `truenas_api_key`, `plex_token`, `homeassistant_token`, `loki_token`, `hermes_api_key`.
 - `cmd/mcp-server/` — MCP stdio server exposing all integrations as tools for Claude/Hermes agents. Build separately with `go build ./cmd/mcp-server/`. Register with `claude mcp add argus -- /path/to/argus-mcp-server`.
 
 **Sub-model pattern:** Each screen model has `Update(msg tea.Msg) (ConcreteType, tea.Cmd)` — returns its own type so `App` can reassign struct fields directly. Navigation is emitted as a `tea.Cmd` returning a typed message.
@@ -156,11 +175,11 @@ claude mcp add argus -- /path/to/argus-mcp-server
 - Matchbox: `matchbox_list_profiles`, `matchbox_list_groups`
 - Home Assistant: `hass_list_entities`, `hass_get_state`, `hass_call_service` (accepts optional `service_data` JSON string)
 
-Credentials are loaded from config.toml first, then overlaid from the macOS Keychain (same keys as the TUI).
+Credentials are loaded from config.toml first, then overlaid from the OS keychain (same keys as the TUI).
 
 ## Configuration
 
-Copy `config.toml.example` to `~/.config/argus/config.toml`, or just run `argus` — with no working Proxmox config it shows a first-run setup screen (`ui/setup.go`) that tests the connection, writes a minimal config, and stores the password in the Keychain (`proxmox_password`). On success, the app launches straight into Orch → Bootstrap (guided setup, wired in `main.go`/`ui/app.go` via `NewApp`'s `guidedSetup` flag) so the rest of the homelab gets walked through in the same sitting instead of a second manual pass. All sections beyond the Proxmox connection are optional; the orchestrator introspects the cluster at runtime. `ARGUS_CONFIG` env var overrides the config file path. Upgrading from ratataskr: config, database, and Keychain entries are migrated forward automatically from `~/.config/ratataskr/` and the legacy `"ratataskr"` Keychain service on first run.
+Copy `config.toml.example` to `~/.config/argus/config.toml`, or just run `argus` — with no working Proxmox config it shows a first-run setup screen (`ui/setup.go`) that tests the connection, writes a minimal config, and stores the password in the OS keychain (`proxmox_password`). On success, the app launches straight into Orch → Bootstrap (guided setup, wired in `main.go`/`ui/app.go` via `NewApp`'s `guidedSetup` flag) so the rest of the homelab gets walked through in the same sitting instead of a second manual pass. All sections beyond the Proxmox connection are optional; the orchestrator introspects the cluster at runtime. `ARGUS_CONFIG` env var overrides the config file path. Upgrading from ratataskr: config, database, and Keychain entries are migrated forward automatically from `~/.config/ratataskr/` and the legacy `"ratataskr"` Keychain service on first run.
 
 - Proxmox auth: either API token (`token_id`/`secret`; Datacenter → Permissions → API Tokens, needs `VM.PowerMgmt` + `VM.Monitor` on `/vms/*`) or ticket auth (`username`/`password`, e.g. `root@pam`).
 - Salt API: requires `salt-api` with CherryPy. User needs `test.ping`, `state.apply`, `grains.item` on `*`.
@@ -186,4 +205,9 @@ Key test files:
 - `ui/services_test.go` — serviceSlug, lazyLoadTab guard tests
 - `ui/setup_test.go` — first-run setup model tests
 - `ui/detail_test.go` — snapDeleting/acting flag independence tests
+- `ui/app_test.go` — tab capture, confirmation bypass, help overlay, provision input
+- `ui/ssh_test.go` — password-not-in-argv and host-key policy tests
+- `ui/styles_test.go` — terminal escape/control-character sanitization
+- `api/stepca_test.go` — step-ca root fingerprint pinning
+- `cmd/metrics-server/main_test.go` — scrape target formatting
 - `cmd/mcp-server/main_test.go` — helper functions and tool catalogue tests

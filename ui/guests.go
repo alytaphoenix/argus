@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -171,13 +170,7 @@ func (m GuestsModel) Update(msg tea.Msg) (GuestsModel, tea.Cmd) {
 		if user == "" {
 			user = "root"
 		}
-		host := user + "@" + msg.ip
-		var cmd *exec.Cmd
-		if m.sshPassword != "" {
-			cmd = exec.Command("sshpass", "-p", m.sshPassword, "ssh", "-o", "StrictHostKeyChecking=no", host)
-		} else {
-			cmd = exec.Command("ssh", "-o", "StrictHostKeyChecking=no", host)
-		}
+		cmd := sshCommand(user, msg.ip, m.sshPassword)
 		return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 			return sshDoneMsg{err}
 		})
