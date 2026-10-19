@@ -122,7 +122,9 @@ network. A reasonable baseline for a single-node homelab:
 
 The bundled installer intentionally does **not** enable the firewall because
 doing so remotely can cut off access. Apply host firewall rules from the
-console or with an out-of-band path.
+console or with an out-of-band path. The reference deployment in the
+[October 2026 review](security-review-2026-10.md) has the firewall enabled
+with an explicit LAN allow rule and `policy_in = DROP`.
 
 ## Hardening checklist
 

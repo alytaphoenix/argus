@@ -4,7 +4,10 @@ All notable changes to argus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.1] - 2026-10-19
+
+First public release. Includes the security hardening, host deployment
+tooling, and documentation prepared for public distribution.
 
 ### Added
 
@@ -53,20 +56,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reports no known vulnerabilities for the module.
 - Added a security policy and hardening checklist.
 - Removed agent-local editor state from the public tree.
-
-## [0.1.0] - 2026-10-19
-
-Initial public release.
-
-### Highlights
-
-- Proxmox nodes, guests, snapshots, provisioning, resizing, migration, and
-  maintenance workflows.
-- Salt orchestrator with key acceptance, pending-VM applies, cluster pillar,
-  and a guided Bootstrap tab.
-- Optional integrations: Salt, Nomad, Prometheus, Loki, TrueNAS, Plex and the
-  Servarr suite, CrowdSec, Wazuh, Technitium DNS, step-ca, Matchbox PXE,
-  Home Assistant, Hermes, and Anthropic Claude.
-- MCP stdio server exposing the same integrations as tools for AI agents.
-- Prometheus metrics exporter and generated scrape configuration.
-- Guided first-run setup and an interactive config editor.
+- Hardened the reference Proxmox deployment: scoped `argus@pve` token, revoked
+  the root token, enabled the Proxmox firewall with an explicit LAN allow rule,
+  loopback-only metrics, verified TLS, and removed the stale password keychain
+  entry.
