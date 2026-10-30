@@ -4,6 +4,49 @@ All notable changes to argus are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- VM SSH key bootstrap: every new QEMU VM is now created with a working SSH
+  public key. First-run setup gained an optional "SSH key" field; leaving it
+  blank generates an Ed25519 keypair at `~/.ssh/argus_ed25519` (directory `0700`,
+  private key `0600`, public `0644`) before the connection test runs.
+- Keys screen third section "VM cloud-init": shows the injected key's SHA-256
+  fingerprint and the managed private key path, with `g` generate, `i` paste and
+  `d` clear. Rotating or clearing asks first, and only `[defaults] ci_ssh_key`
+  is cleared — private key files and `[globals] ssh_key` are left alone.
+- `sshkey/` package: Ed25519 generation with atomic writes, `Ensure` reuse of an
+  existing valid pair, line-strict authorized-keys normalization, fingerprints.
+  Only public material is ever stored in the config or shown in the UI.
+- Generating the keypair records its path in `[globals] ssh_key` only when that
+  setting is empty or already points at the managed pair. An operator key living
+  there is the node SSH / bootstrap key, and repointing it at a key no host
+  authorizes would break SSH behind an action that promises "future VMs only".
+
+### Changed
+
+- Provisioning resolves the cloud-init key the same way on every path — form
+  field first, then `[defaults].ci_ssh_key` — and refuses to clone with a clear
+  error when neither yields a valid key, instead of creating a VM nobody can log
+  into. A cloud-init profile with a malformed key no longer silently loads
+  nothing. Existing VMs are never modified.
+- `proxmox_clone_vm` (MCP) falls back to `[defaults].ci_ssh_key` and validates
+  the key before asking Proxmox for a VMID or starting a clone.
+- The new Keys section keeps `tab`/`shift+tab` while its paste dialog or a
+  confirmation is open, like every other form screen.
+
+### Fixed
+
+- Cancelling a VM cloud-init rotate/clear left the action armed, so a later
+  `d` + `Y` on a Global or Per-node credential row ran the stale cloud-init
+  action instead of deleting the selected row. Arming a delete now resets it.
+- Keys screen text was shoved to the right because lipgloss pads the blank lines
+  created by a newline inside `Render()`; newlines now stay outside the styled
+  string (also fixes the Per-node SSH header).
+- `ui` tests no longer read the developer's real OS keychain; they run against
+  go-keyring's in-memory mock instead of triggering an authorization prompt.
+
 ## [0.3.0] - 2026-10-19
 
 ### Added

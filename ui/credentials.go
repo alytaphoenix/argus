@@ -40,6 +40,7 @@ type credSection int
 const (
 	credSectionGlobal credSection = iota
 	credSectionNodes
+	credSectionVMKey
 )
 
 type CredentialsModel struct {
@@ -52,7 +53,7 @@ type CredentialsModel struct {
 	width     int
 	height    int
 	database  *db.DB
-	globals   config.GlobalsConfig
+	cfg       config.Config
 	nodeCreds []db.NodeSSHCred
 	// per-node edit state
 	nodeEditMode string // "node" | "user" | "pass" | ""
@@ -64,10 +65,14 @@ type CredentialsModel struct {
 	confirmDeleteGlobal bool // true = credRow delete, false = node SSH cred delete
 	confirmDeleteRow    credRow
 	confirmDeleteNode   db.NodeSSHCred
+
+	// VM cloud-init key state (handled in credentials_vm_key.go)
+	vmKeySaving  bool
+	confirmVMKey string // "clear" | "rotate" | ""
 }
 
-func NewCredentialsModel(database *db.DB, globals config.GlobalsConfig) CredentialsModel {
-	m := CredentialsModel{database: database, globals: globals}
+func NewCredentialsModel(database *db.DB, cfg config.Config) CredentialsModel {
+	m := CredentialsModel{database: database, cfg: cfg}
 	if database != nil {
 		m.nodeCreds, _ = database.NodeSSHCreds()
 	}
@@ -76,6 +81,18 @@ func NewCredentialsModel(database *db.DB, globals config.GlobalsConfig) Credenti
 
 func (m CredentialsModel) Init() tea.Cmd { return nil }
 
+// armDeleteConfirm opens the shared confirmation dialog for a keychain or DB
+// delete. confirmVMKey is always reset: one dialog answers every delete, so a
+// rotate/clear that was armed earlier and cancelled would otherwise run in
+// place of the row the operator just selected.
+func (m *CredentialsModel) armDeleteConfirm(global bool, row credRow, node db.NodeSSHCred) {
+	m.confirmVMKey = ""
+	m.confirmDeleteGlobal = global
+	m.confirmDeleteRow = row
+	m.confirmDeleteNode = node
+	m.confirmDelete = true
+}
+
 func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -83,6 +100,11 @@ func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 			switch msg.String() {
 			case "y", "Y", "enter":
 				m.confirmDelete = false
+				if m.confirmVMKey != "" {
+					action := m.confirmVMKey
+					m.confirmVMKey = ""
+					return m.runVMKeyConfirm(action)
+				}
 				if m.confirmDeleteGlobal {
 					row := m.confirmDeleteRow
 					if err := gkr.Delete(row.key); err != nil {
@@ -115,6 +137,7 @@ func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 				}
 			default:
 				m.confirmDelete = false
+				m.confirmVMKey = ""
 			}
 			return m, nil
 		}
@@ -123,6 +146,9 @@ func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 			switch msg.String() {
 			case "enter":
 				val := m.input.Value()
+				if m.section == credSectionVMKey {
+					return m.finishVMKeyImport(val)
+				}
 				if m.section == credSectionGlobal {
 					row := credRows[m.cursor]
 					if val == "" {
@@ -130,9 +156,7 @@ func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 						// the same confirm dialog as the "d" key so an
 						// accidental blank submit can't erase a secret.
 						if gkr.IsSet(row.key) {
-							m.confirmDelete = true
-							m.confirmDeleteGlobal = true
-							m.confirmDeleteRow = row
+							m.armDeleteConfirm(true, row, db.NodeSSHCred{})
 						} else {
 							m.notice = "nothing to delete"
 						}
@@ -168,9 +192,8 @@ func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 							// Blank submits as a delete request — same confirm
 							// gate as the "d" key.
 							if gkr.IsSet(keyringKey) {
-								m.confirmDelete = true
-								m.confirmDeleteGlobal = false
-								m.confirmDeleteNode = db.NodeSSHCred{Node: node, SSHUser: user, KeyringKey: keyringKey}
+								m.armDeleteConfirm(false, credRow{},
+									db.NodeSSHCred{Node: node, SSHUser: user, KeyringKey: keyringKey})
 							} else {
 								m.notice = "nothing to delete"
 							}
@@ -210,15 +233,23 @@ func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 			return m, cmd
 		}
 
+		// The VM cloud-init section owns its keys; the shared confirmation and
+		// paste-input states above still apply to it.
+		if m.section == credSectionVMKey {
+			return m.updateVMKey(msg)
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "esc", "b":
 			return m, func() tea.Msg { return backMsg{} }
 		case "left", "right", "h", "l":
-			if m.section == credSectionGlobal {
+			switch m.section {
+			case credSectionGlobal:
 				m.section = credSectionNodes
-			} else {
+			case credSectionNodes:
+				m.section = credSectionVMKey
+			default:
 				m.section = credSectionGlobal
 			}
 			m.cursor = 0
@@ -287,14 +318,10 @@ func (m CredentialsModel) Update(msg tea.Msg) (CredentialsModel, tea.Cmd) {
 				if !gkr.IsSet(row.key) {
 					m.notice = "not in keychain"
 				} else {
-					m.confirmDelete = true
-					m.confirmDeleteGlobal = true
-					m.confirmDeleteRow = row
+					m.armDeleteConfirm(true, row, db.NodeSSHCred{})
 				}
 			} else if m.cursor < len(m.nodeCreds) {
-				m.confirmDelete = true
-				m.confirmDeleteGlobal = false
-				m.confirmDeleteNode = m.nodeCreds[m.cursor]
+				m.armDeleteConfirm(false, credRow{}, m.nodeCreds[m.cursor])
 			}
 		}
 	}
@@ -344,26 +371,33 @@ func (m CredentialsModel) View() string {
 	sb.WriteString(styleDim.Render(`  Cloud-init passwords and Servarr API keys live in the local DB/config (0600).`) + "\n")
 	sb.WriteString(styleDim.Render(`  Protect backups: the SQLite DB can contain cloud-init secrets.`) + "\n")
 	sb.WriteString(styleDim.Render("  Global SSH user: ") +
-		styleBold.Render(m.globals.SSHUser))
-	if m.globals.Domain != "" {
-		sb.WriteString(styleDim.Render("   Domain: ") + styleBold.Render(m.globals.Domain))
+		styleBold.Render(m.cfg.Globals.SSHUser))
+	if m.cfg.Globals.Domain != "" {
+		sb.WriteString(styleDim.Render("   Domain: ") + styleBold.Render(m.cfg.Globals.Domain))
 	}
 	sb.WriteString("\n\n")
 
 	// Section tabs
-	gs := " Global credentials "
-	ns := " Per-node SSH "
-	if m.section == credSectionGlobal {
-		sb.WriteString(styleTabActive.Render("▸"+gs) + styleDim.Render("│") + styleTabInactive.Render(" "+ns))
-	} else {
-		sb.WriteString(styleTabInactive.Render(" "+gs) + styleDim.Render("│") + styleTabActive.Render("▸"+ns))
+	tabs := []string{" Global credentials ", " Per-node SSH ", " VM cloud-init "}
+	for i, label := range tabs {
+		if i > 0 {
+			sb.WriteString(styleDim.Render("│"))
+		}
+		if credSection(i) == m.section {
+			sb.WriteString(styleTabActive.Render("▸" + label))
+		} else {
+			sb.WriteString(styleTabInactive.Render(" " + label))
+		}
 	}
 	sb.WriteString(styleDim.Render("  ←/→ switch") + "\n\n")
 
-	if m.section == credSectionGlobal {
+	switch m.section {
+	case credSectionGlobal:
 		m.viewGlobal(&sb)
-	} else {
+	case credSectionNodes:
 		m.viewNodes(&sb)
+	default:
+		m.viewVMKey(&sb)
 	}
 
 	sb.WriteString("\n")
@@ -378,13 +412,22 @@ func (m CredentialsModel) View() string {
 		case "pass":
 			prompt = "  SSH pass:   " + m.input.View() + "\n\n"
 		}
+		if m.section == credSectionVMKey {
+			prompt = "  SSH public key: " + m.input.View() + "\n\n"
+		}
 		sb.WriteString(prompt)
 		sb.WriteString(styleHelp.Render("  enter save  esc cancel") + "\n")
 	} else if m.confirmDelete {
 		var label string
-		if m.confirmDeleteGlobal {
+		switch {
+		case m.confirmVMKey == vmKeyConfirmClear:
+			label = "Clear the default cloud-init SSH public key? New VMs get no key until one is set. [Y/n]"
+		case m.confirmVMKey == vmKeyConfirmRotate:
+			label = "Generate a NEW keypair at the managed path, replacing the existing one? " +
+				"Only future VMs change; existing VMs keep the old key. [Y/n]"
+		case m.confirmDeleteGlobal:
 			label = fmt.Sprintf("Delete %q from Keychain? [Y/n]", m.confirmDeleteRow.displayName)
-		} else {
+		default:
 			label = fmt.Sprintf("Delete SSH credentials for %q? [Y/n]", m.confirmDeleteNode.Node)
 		}
 		sb.WriteString(styleError.Render("  "+label) + "\n\n")
@@ -397,10 +440,13 @@ func (m CredentialsModel) View() string {
 		} else {
 			sb.WriteString("\n\n")
 		}
-		if m.section == credSectionGlobal {
+		switch m.section {
+		case credSectionGlobal:
 			sb.WriteString(styleHelp.Render("  enter edit  d delete  ←/→ switch section  b back") + "\n")
-		} else {
+		case credSectionNodes:
 			sb.WriteString(styleHelp.Render("  enter add/edit  d delete  ←/→ switch section  b back") + "\n")
+		default:
+			sb.WriteString(styleHelp.Render("  enter/i paste key  g generate  d clear  ←/→ switch section  b back") + "\n")
 		}
 	}
 
@@ -427,7 +473,7 @@ func (m CredentialsModel) viewGlobal(sb *strings.Builder) {
 }
 
 func (m CredentialsModel) viewNodes(sb *strings.Builder) {
-	sb.WriteString(styleDim.Render("  Per-node SSH overrides loaded from keychain before global SSH password.\n\n"))
+	sb.WriteString(styleDim.Render("  Per-node SSH overrides loaded from keychain before global SSH password.") + "\n\n")
 
 	header := fmt.Sprintf("  %-20s  %-12s  %s", "NODE", "SSH USER", "KEYCHAIN")
 	sb.WriteString(styleDim.Render(header) + "\n")

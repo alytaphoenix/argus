@@ -14,6 +14,7 @@ import (
 	"github.com/alytaphoenix/argus/api"
 	"github.com/alytaphoenix/argus/config"
 	"github.com/alytaphoenix/argus/db"
+	"github.com/alytaphoenix/argus/sshkey"
 	"github.com/alytaphoenix/argus/wiring"
 )
 
@@ -92,9 +93,9 @@ func NewProvisionModel(client *api.Client, node api.Node, defaults config.Defaul
 	inputs[provFieldCIPassword].Placeholder = "cloud-init password"
 	inputs[provFieldCIPassword].EchoMode = textinput.EchoPassword
 
-	inputs[provFieldSSHKey].Placeholder = "SSH public key (optional)"
+	inputs[provFieldSSHKey].Placeholder = "SSH public key (blank = global default)"
 	inputs[provFieldSSHKey].SetValue(defaults.CISSHKey)
-	inputs[provFieldSSHKey].CharLimit = 2048
+	inputs[provFieldSSHKey].CharLimit = 4096
 
 	inputs[provFieldIPConfig].Placeholder = "ip=dhcp or ip=x.x.x.x/24,gw=..."
 	inputs[provFieldIPConfig].SetValue(defaults.CIIPConfig)
@@ -138,9 +139,22 @@ func (m ProvisionModel) loadCIProfile() (ProvisionModel, tea.Cmd) {
 		m.profileNotice = "profile not found: " + name
 		return m, nil
 	}
+	// A profile that carries a key overrides the global default; a profile
+	// without one must not erase the fallback, or provisioning would silently
+	// clone VMs nobody can log into. Validate before touching any field so a
+	// broken profile can't half-load.
+	profileSSHKey := m.defaults.CISSHKey
+	if strings.TrimSpace(p.CISSHKey) != "" {
+		normalized, err := sshkey.NormalizePublicKeys(p.CISSHKey)
+		if err != nil {
+			m.profileNotice = "invalid SSH public key in profile: " + err.Error()
+			return m, nil
+		}
+		profileSSHKey = normalized
+	}
 	m.inputs[provFieldCIUser].SetValue(p.CIUser)
 	m.inputs[provFieldCIPassword].SetValue(p.CIPassword)
-	m.inputs[provFieldSSHKey].SetValue(p.CISSHKey)
+	m.inputs[provFieldSSHKey].SetValue(profileSSHKey)
 	m.inputs[provFieldIPConfig].SetValue(p.CIIPConfig)
 	m.profileNotice = "loaded cloud-init profile: " + p.Name
 	return m, nil
@@ -187,6 +201,27 @@ func (m ProvisionModel) startSubmit() (ProvisionModel, tea.Cmd) {
 			return m, nil
 		}
 	}
+
+	// A key is mandatory: explicit form input wins, then the profile value
+	// already sitting in the field, then the global default. Cloning a VM
+	// nobody can log into is worse than refusing to submit, so this runs
+	// before any request is issued.
+	rawSSHKey := strings.TrimSpace(m.inputs[provFieldSSHKey].Value())
+	if rawSSHKey == "" {
+		rawSSHKey = strings.TrimSpace(m.defaults.CISSHKey)
+	}
+	if rawSSHKey == "" {
+		m.err = fmt.Errorf("SSH public key is required; generate or import one in Keys")
+		return m, nil
+	}
+	normalizedSSHKey, err := sshkey.NormalizePublicKeys(rawSSHKey)
+	if err != nil {
+		m.err = fmt.Errorf("invalid SSH public key: %v", err)
+		return m, nil
+	}
+	// submit() re-reads the field once per VM in the batch, so writing the
+	// canonical value back is what guarantees every clone gets the same key.
+	m.inputs[provFieldSSHKey].SetValue(normalizedSSHKey)
 
 	m.submitting = true
 	m.err = nil

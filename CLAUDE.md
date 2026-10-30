@@ -63,7 +63,7 @@ Bubble Tea TUI for managing a Proxmox homelab. Integrates Proxmox, Salt, Nomad, 
 14. `Alerts` — alert routing rules (CrowdSec/Wazuh events → webhooks)
 15. `Lifecycle` — VM lifecycle policies (stop/snapshot long-running tagged VMs)
 16. `Settings` — DB-backed configurable thresholds and timeouts
-17. `Keys` — OS keychain credential manager
+17. `Keys` — OS keychain credential manager + VM cloud-init SSH key section (generate/import/clear the key injected into new VMs)
 
 Scheduled maintenance runs and due schedules are fired by a once-a-minute
 scheduler tick in `ui/app.go` (`schedulerTickCmd` → `runDueSchedulesCmd`),
@@ -94,6 +94,8 @@ independent of which screen is open.
 - `ui/plex.go` — `PlexModel` with 4 tabs: Status (active sessions), Libraries (TrueNAS auto-configure), Services (Servarr checklist), Provision (VM deployment instructions).
 - `ui/maintenance.go` — `MaintenanceModel` with tabs: Runs, Schedules, Configure wizard. HA-aware: migrates VMs off node before reboot. Order: non-master nodes first, master last. Configurable via K/J to reorder, 1-5 to toggle task flags.
 - `ui/settings.go` — `SettingsModel` for editing `app_settings` DB keys (Wazuh thresholds, scan timeout, ban lookback, health check timeout).
+- `ui/credentials.go` — Keys screen coordinator over three sections (Global credentials / Per-node SSH / VM cloud-init). Shared text-input and delete-confirmation state lives here and dispatches into the section handlers. One dialog answers every delete, so `armDeleteConfirm` resets `confirmVMKey` whenever a keychain/DB row is armed, and cancelling clears it — a cancelled rotate can otherwise run in place of the row the operator picked.
+- `ui/credentials_vm_key.go` — VM cloud-init key section: `g` generate, `i`/`enter` paste, `d` clear (rotate/clear ask first), all work in async commands reporting `vmKeySavedMsg`. `App.Update` handles that message before screen delegation so `a.cfg`/`a.defaults` never go stale for the next provisioning form. `d` clears only `[defaults] ci_ssh_key`; it never deletes private key files or `[globals] ssh_key`.
 - `ui/security.go` — CrowdSec + Wazuh + port scan. Cross-references `service_hosts` with Wazuh agents (Managed column). Scan findings update `discovered_ports` in DB. Configurable thresholds from `AppSettings`.
 - `ui/services.go` — thin coordinator (454 lines): struct, `NewServicesModel`, `Update` delegator, `handleKey`, `View`, `renderTabBar`, `lazyLoadTab`. Each tab is its own file.
 - `ui/services_svc.go` — Services tab: health checks, service registry, provision/register dialogs, automatic Salt wiring on add/delete (`w` forces a refresh).
@@ -106,6 +108,7 @@ independent of which screen is open.
 - `formula/` — built-in catalog (`base`, `salt-minion`, `docker`, `node-exporter`, `technitium`, `traefik`, `uptime-kuma`) plus integration entries; dependency resolution and state naming.
 - `db/db.go` — SQLite WAL mode. Migrations run as sequential `CREATE TABLE IF NOT EXISTS` / `ALTER` blocks at open (not strictly version-ordered in source); the destructive v16 certificates rebuild is guarded by `PRAGMA user_version`. Tables: `cloud_init_profiles`, `salt_profiles` (+ v17 `pillar_yaml` column), `provisioned_vms`, `salt_apply_events`, `nomad_job_snapshots`, `nomad_job_events`, `services`, `service_health_checks`, `certificates`, `dns_records_cache`, `vm_resize_events`, `pxe_profiles`, `pxe_groups`, `pxe_boot_events`, `security_events`, `service_hosts`, `node_ssh_credentials`, `scan_results`, `app_settings`, `node_metrics_history`, `service_uptime_events`, `runbooks`, `runbook_runs`, `alert_routes`, `vm_lifecycle_policies`, `maintenance_schedules`, `maintenance_runs`, `maintenance_run_steps`, `cluster_pillar` (v17: key, value, source, updated_at), `platform_profiles`, `formula_installations`, `bootstrap_runs` (v18).
 - `keyring/` — OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager) via `github.com/zalando/go-keyring`. Keys: `proxmox_secret`, `proxmox_password`, `salt_password`, `nomad_token`, `ssh_password`, `wazuh_password`, `crowdsec_api_key`, `matchbox_token`, `technitium_token`, `prometheus_token`, `anthropic_api_key`, `truenas_api_key`, `plex_token`, `homeassistant_token`, `loki_token`, `hermes_api_key`.
+- `sshkey/` — cloud-init SSH key primitives: `DefaultPrivateKeyPath` (`~/.ssh/argus_ed25519`), `Generate`/`Ensure` (Ed25519, temp-file+rename, directory `0700`, private `0600`, public `0644`; `Ensure` reuses only a pair whose private half matches the `.pub`), `NormalizePublicKeys` (line-strict authorized-keys parse, canonical `ssh.MarshalAuthorizedKey` output, rejects prose/comments/private PEM), `Fingerprint`. Only public material leaves this package.
 - `cmd/mcp-server/` — MCP stdio server exposing all integrations as tools for Claude/Hermes agents. Build separately with `go build ./cmd/mcp-server/`. Register with `claude mcp add argus -- /path/to/argus-mcp-server`.
 
 **Sub-model pattern:** Each screen model has `Update(msg tea.Msg) (ConcreteType, tea.Cmd)` — returns its own type so `App` can reassign struct fields directly. Navigation is emitted as a `tea.Cmd` returning a typed message.
@@ -183,11 +186,22 @@ claude mcp add argus -- /path/to/argus-mcp-server
 
 Credentials are loaded from config.toml first, then overlaid from the OS keychain (same keys as the TUI).
 
+`proxmox_clone_vm` resolves the cloud-init key from `ci_ssh_keys` and then
+`[defaults].ci_ssh_key`, validating both *before* `nextid`/`clone`: an incomplete
+request fails instead of creating an unreachable VM.
+
 ## Configuration
 
 Copy `config.toml.example` to `~/.config/argus/config.toml`, or just run `argus` — with no working Proxmox config it shows a first-run setup screen (`ui/setup.go`) that tests the connection, writes a minimal config, and stores the password in the OS keychain (`proxmox_password`). On success, the app launches straight into Orch → Bootstrap (guided setup, wired in `main.go`/`ui/app.go` via `NewApp`'s `guidedSetup` flag) so the rest of the homelab gets walked through in the same sitting instead of a second manual pass. All sections beyond the Proxmox connection are optional; the orchestrator introspects the cluster at runtime. `ARGUS_CONFIG` env var overrides the config file path. Upgrading from ratataskr: config, database, and Keychain entries are migrated forward automatically from `~/.config/ratataskr/` and the legacy `"ratataskr"` Keychain service on first run.
 
+Every new QEMU VM needs an SSH public key. The setup screen's optional "SSH
+key" field takes an authorized-keys line; leaving it blank generates
+`~/.ssh/argus_ed25519` before the connection test and stores the public half in
+`[defaults] ci_ssh_key` (`config.SaveProxmoxSetup` also records the private path
+in `[globals] ssh_key`). Private key material is never written to the TOML file.
+
 - Proxmox auth: either API token (`token_id`/`secret`; Datacenter → Permissions → API Tokens, needs `VM.PowerMgmt` + `VM.Monitor` on `/vms/*`) or ticket auth (`username`/`password`, e.g. `root@pam`).
+- VM SSH key: `[defaults] ci_ssh_key` is injected into every new QEMU VM through Proxmox cloud-init. Keys → "VM cloud-init" generates (`g`), imports (`i`) or clears (`d`) it; generation writes an Ed25519 pair to `~/.ssh/argus_ed25519` (`0600`, directory `0700`) and records that path in `[globals] ssh_key` **only when it is empty or already the managed pair** — an operator key living there is the node SSH / bootstrap key and is never repointed, so `vmKeyManagedPath` recognises the managed pair by its public half instead. Provisioning — TUI form, batches, profiles and MCP — resolves field value → `[defaults].ci_ssh_key` and refuses to clone when neither yields a valid key. Existing VMs are never modified.
 - Salt API: requires `salt-api` with CherryPy. User needs `test.ping`, `state.apply`, `grains.item` on `*`.
 - Nomad: default port 4646, no TLS in dev; ACL token optional.
 - Plex token: visit https://support.plex.tv/articles/204059436 or use Plex Web developer tools. Store in Keychain via Keys screen (key: `plex_token`).
@@ -207,15 +221,18 @@ Key test files:
 - `api/scan_test.go` — port scanner tests
 - `db/db_test.go` — migration, CRUD, and settings tests
 - `api/client_test.go` — Proxmox ticket + token auth tests (httptest server)
-- `config/config_test.go` — config load, env override, ApplyGlobals, SaveProxmoxSetup tests (isolated from the real config file via `ARGUS_CONFIG` in `TestMain`)
+- `config/config_test.go` — config load, env override, ApplyGlobals, SaveProxmoxSetup incl. `[defaults] ci_ssh_key` round-trip and "no private key material in the TOML file" (isolated from the real config file via `ARGUS_CONFIG` in `TestMain`)
 - `ui/services_test.go` — serviceSlug, lazyLoadTab guard tests
-- `ui/setup_test.go` — first-run setup model tests
+- `ui/setup_test.go` — first-run setup model tests incl. the optional SSH public key field (blank generates a pair, pasted key writes no private pair, malformed key fails before connecting)
 - `ui/detail_test.go` — snapDeleting/acting flag independence tests
 - `ui/app_test.go` — tab capture, confirmation bypass, help overlay, provision input
 - `ui/ssh_test.go` — password-not-in-argv and host-key policy tests
 - `ui/styles_test.go` — terminal escape/control-character sanitization
 - `api/stepca_test.go` — step-ca root fingerprint pinning
 - `cmd/metrics-server/main_test.go` — scrape target formatting
-- `cmd/mcp-server/main_test.go` — helper functions and tool catalogue tests
+- `cmd/mcp-server/main_test.go` — helper functions, tool catalogue, and `proxmox_clone_vm` SSH key resolution incl. "refuses before any Proxmox request" (httptest server)
 - `bootstrap/bootstrap_test.go` — Salt install script, formula files, SSH argv
 - `formula/formula_test.go` — registry validation, dependency order, state names
+- `sshkey/sshkey_test.go` — keypair generation modes, private/public pair match, `Ensure` reuse, authorized-keys normalization accept/reject table, fingerprints
+- `ui/credentials_test.go` — VM cloud-init key generate/import/clear, confirmations, section cycling, `vmKeySavedMsg` propagation to `App.defaults`, left-aligned rendering
+- `ui/provision_test.go` — cloud-init SSH key precedence, key propagation to every VM in a batch, refusal without a valid key, profile key fallback

@@ -321,7 +321,9 @@ func (a App) screenCapturesTab() bool {
 	case screenProfiles:
 		return a.profiles.editing != editNone || a.profiles.confirmDelete
 	case screenCredentials:
-		return a.credentials.editing
+		// Paste dialogs, confirmations and in-flight key work all own tab:
+		// leaving them mid-operation would abandon a half-answered prompt.
+		return a.credentials.editing || a.credentials.confirmDelete || a.credentials.vmKeySaving
 	case screenMetrics:
 		return a.metrics.customActive || a.metrics.lokiActive
 	case screenServices:
@@ -375,7 +377,7 @@ func (a App) switchSection(next screenID) (App, tea.Cmd) {
 		}
 	case screenCredentials:
 		a.screen = screenCredentials
-		a.credentials = NewCredentialsModel(a.database, a.cfg.Globals)
+		a.credentials = NewCredentialsModel(a.database, a.cfg)
 		a.credentials.width, a.credentials.height = a.width, a.height
 		return a, a.credentials.Init()
 	case screenProfiles:
@@ -470,6 +472,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.alertRoutes.width, a.alertRoutes.height = msg.Width, msg.Height
 		a.lifecycle.width, a.lifecycle.height = msg.Width, msg.Height
 		a.claudeOverlay.width, a.claudeOverlay.height = msg.Width, msg.Height
+		return a, nil
+
+	case vmKeySavedMsg:
+		// The Keys screen generated/imported/cleared the cloud-init SSH key and
+		// already persisted it. Root owns the outcome: a.cfg and a.defaults are
+		// what the next provisioning form reads, so leaving them stale would
+		// hand a VM the previous key. On failure the old config stays as-is.
+		a.credentials.vmKeySaving = false
+		if msg.err != nil {
+			a.credentials.err = msg.err
+			return a, nil
+		}
+		a.cfg = msg.cfg
+		a.defaults = msg.cfg.Defaults
+		a.credentials.cfg = msg.cfg
+		a.credentials.err = nil
+		a.credentials.notice = msg.notice
 		return a, nil
 
 	case nodeSelectedMsg:

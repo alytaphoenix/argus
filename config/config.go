@@ -508,7 +508,13 @@ func migrateLegacyConfig(path string) {
 // SaveProxmoxSetup writes a minimal config file from the first-run setup
 // screen. The password is stored in the Keychain, never in the file. Other
 // integrations are introspected at runtime or added to the file by hand.
-func SaveProxmoxSetup(host, username string, insecure bool) error {
+//
+// ciSSHKey is the canonical public key new VMs are provisioned with; it is
+// always written so provisioning has a default. privateKeyPath is the
+// absolute path of the keypair argus generated for that public key — private
+// key material is never written, and the line is omitted when the operator
+// pasted a public key whose private half lives elsewhere.
+func SaveProxmoxSetup(host, username string, insecure bool, ciSSHKey, privateKeyPath string) error {
 	path, err := defaultPath()
 	if err != nil {
 		return err
@@ -523,5 +529,9 @@ host     = %q
 username = %q
 insecure = %v
 `, host, username, insecure)
+	if privateKeyPath != "" {
+		content += fmt.Sprintf("\n[globals]\nssh_key = %q\n", privateKeyPath)
+	}
+	content += fmt.Sprintf("\n[defaults]\nci_ssh_key = %q\n", ciSSHKey)
 	return os.WriteFile(path, []byte(content), 0o600)
 }

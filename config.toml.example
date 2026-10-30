@@ -26,7 +26,7 @@ insecure = false                 # set true only for a self-signed cert you cann
 # Env vars: ARGUS_SSH_USER, ARGUS_SSH_KEY, ARGUS_DOMAIN, ARGUS_TIMEZONE
 [globals]
 ssh_user    = "admin"        # default SSH username for all node connections
-ssh_key     = ""             # path to SSH private key (leave empty to use ssh-agent)
+ssh_key     = ""             # path to SSH private key (empty = ssh-agent); Keys -> "VM cloud-init" records the Ed25519 keypair it generates for new VMs here
 domain      = ""             # homelab domain suffix, e.g. "homelab.local"
 timezone    = "UTC"          # IANA timezone for log display (e.g. "America/New_York")
 admin_email = ""             # operator email for cert SANs / notifications
@@ -73,7 +73,7 @@ bridge        = "vmbr0"
 ostype        = "l26"
 ssh_user      = ""          # inherits globals.ssh_user ("admin") — override here if needed
 ci_user       = "ubuntu"
-ci_ssh_key    = ""          # paste your public key here
+ci_ssh_key    = ""          # public key injected into every new VM; generate/import it in Keys -> "VM cloud-init" (provisioning refuses to clone without one)
 ci_ipconfig   = "ip=dhcp"
 nameserver    = "1.1.1.1"
 searchdomain  = ""          # inherits globals.domain if set

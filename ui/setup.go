@@ -12,12 +12,14 @@ import (
 	"github.com/alytaphoenix/argus/api"
 	"github.com/alytaphoenix/argus/config"
 	gkr "github.com/alytaphoenix/argus/keyring"
+	"github.com/alytaphoenix/argus/sshkey"
 )
 
 const (
 	setupFieldHost = iota
 	setupFieldUsername
 	setupFieldPassword
+	setupFieldSSHKey
 	setupFieldCount
 )
 
@@ -60,6 +62,12 @@ func NewSetupModel(reason string) SetupModel {
 	pass.CharLimit = 256
 	pass.Width = 48
 	m.inputs[setupFieldPassword] = pass
+
+	sshKey := textinput.New()
+	sshKey.Placeholder = "SSH public key (blank = generate ed25519)"
+	sshKey.CharLimit = 4096
+	sshKey.Width = 48
+	m.inputs[setupFieldSSHKey] = sshKey
 
 	return m
 }
@@ -136,7 +144,7 @@ func (m SetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			username := strings.TrimSpace(m.inputs[setupFieldUsername].Value())
 			password := m.inputs[setupFieldPassword].Value()
 			if host == "" || username == "" || password == "" {
-				m.errMsg = "all fields are required"
+				m.errMsg = "host, username and password are required"
 				return m, nil
 			}
 			if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
@@ -146,7 +154,8 @@ func (m SetupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.testing = true
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			m.cancelTest = cancel
-			return m, setupTestCmd(ctx, host, username, password, m.insecure)
+			rawSSHKey := strings.TrimSpace(m.inputs[setupFieldSSHKey].Value())
+			return m, setupTestCmd(ctx, host, username, password, rawSSHKey, m.insecure)
 		}
 	}
 
@@ -162,12 +171,37 @@ func (m SetupModel) setFocus(i int) SetupModel {
 	return m
 }
 
-// setupTestCmd tests the Proxmox connection. ctx is owned by the caller
-// (SetupModel.cancelTest), which cancels it either when the user presses esc
-// to abort the test or once a result arrives — so no explicit cancel() call
-// is needed here.
-func setupTestCmd(ctx context.Context, host, username, password string, insecure bool) tea.Cmd {
+// setupTestCmd resolves the cloud-init SSH key, tests the Proxmox connection
+// and only then persists everything. A pasted value is treated strictly as
+// public-key material (never as a private key or a file path); a blank value
+// means "generate one for me", which reuses an existing argus keypair so
+// retrying after a failed connection never leaves a half-applied setup
+// behind. ctx is owned by the caller (SetupModel.cancelTest), which cancels it
+// either when the user presses esc to abort the test or once a result arrives —
+// so no explicit cancel() call is needed here.
+func setupTestCmd(ctx context.Context, host, username, password, rawSSHKey string, insecure bool) tea.Cmd {
 	return func() tea.Msg {
+		ciSSHKey := strings.TrimSpace(rawSSHKey)
+		privateKeyPath := ""
+		if ciSSHKey != "" {
+			normalized, err := sshkey.NormalizePublicKeys(ciSSHKey)
+			if err != nil {
+				return setupResultMsg{err: fmt.Errorf("SSH public key: %w", err)}
+			}
+			ciSSHKey = normalized
+		} else {
+			path, err := sshkey.DefaultPrivateKeyPath()
+			if err != nil {
+				return setupResultMsg{err: fmt.Errorf("ssh key path: %w", err)}
+			}
+			generated, err := sshkey.Ensure(path)
+			if err != nil {
+				return setupResultMsg{err: fmt.Errorf("ssh key: %w", err)}
+			}
+			ciSSHKey = generated
+			privateKeyPath = path
+		}
+
 		cfg := &config.Config{Host: host, Username: username, Password: password, Insecure: insecure}
 		client := api.NewClient(cfg)
 		if _, err := client.Nodes(ctx); err != nil {
@@ -179,7 +213,7 @@ func setupTestCmd(ctx context.Context, host, username, password string, insecure
 		if err := gkr.Save(gkr.KeyProxmoxPassword, password); err != nil {
 			return setupResultMsg{err: fmt.Errorf("keychain: %w", err)}
 		}
-		if err := config.SaveProxmoxSetup(host, username, insecure); err != nil {
+		if err := config.SaveProxmoxSetup(host, username, insecure, ciSSHKey, privateKeyPath); err != nil {
 			return setupResultMsg{err: fmt.Errorf("write config: %w", err)}
 		}
 		return setupResultMsg{}
@@ -196,7 +230,7 @@ func (m SetupModel) View() string {
 	}
 	b.WriteString("\n")
 
-	labels := [setupFieldCount]string{"Host    ", "Username", "Password"}
+	labels := [setupFieldCount]string{"Host    ", "Username", "Password", "SSH key "}
 	for i, in := range m.inputs {
 		label := labels[i]
 		if i == m.focus {

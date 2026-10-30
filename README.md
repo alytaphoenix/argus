@@ -33,6 +33,11 @@ integrations except Proxmox are optional.
 - **Proxmox:** node/guest inventory, start/stop/reboot, snapshots, cloning,
   cloud-init provisioning, right-sizing recommendations, migration, and
   maintenance.
+
+- **SSH access by default:** every new VM gets a cloud-init SSH public key —
+  paste one or let argus generate an Ed25519 pair in `~/.ssh`, managed under
+  Keys → "VM cloud-init". Provisioning refuses to clone without a valid key, and
+  existing VMs are never modified.
 - **Salt orchestration:** minion keys, pending VM applies, cluster pillar,
   guided Bootstrap, and service wiring.
 - **Platform bootstrap and formula registry:** inspects a Proxmox host, installs

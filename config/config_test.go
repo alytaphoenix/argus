@@ -414,7 +414,11 @@ func TestSaveProxmoxSetup(t *testing.T) {
 	)
 	defer cleanup()
 
-	if err := SaveProxmoxSetup("https://pve.test:8006", "root@pam", true); err != nil {
+	ciSSHKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP2Y1nZ0Zq0m1cVC1kEQ3sQxW7pYbGhKd6TJXK9ZcQ1a argus@pve\n" +
+		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ0k1nZ0Zq0m1cVC1kEQ3sQxW7pYbGhKd6TJXK9ZcQ1b"
+	privateKeyPath := filepath.Join(t.TempDir(), ".ssh", "argus_ed25519")
+
+	if err := SaveProxmoxSetup("https://pve.test:8006", "root@pam", true, ciSSHKey, privateKeyPath); err != nil {
 		t.Fatalf("SaveProxmoxSetup: %v", err)
 	}
 
@@ -434,12 +438,57 @@ func TestSaveProxmoxSetup(t *testing.T) {
 	if cfg.Password != "" {
 		t.Error("password must never be written to the config file")
 	}
+	if cfg.Defaults.CISSHKey != ciSSHKey {
+		t.Errorf("Defaults.CISSHKey = %q, want %q", cfg.Defaults.CISSHKey, ciSSHKey)
+	}
+	if cfg.Globals.SSHKey != privateKeyPath {
+		t.Errorf("Globals.SSHKey = %q, want %q", cfg.Globals.SSHKey, privateKeyPath)
+	}
+	if cfg.Bootstrap.SSHKey != privateKeyPath {
+		t.Errorf("Bootstrap.SSHKey = %q, want the propagated global key path", cfg.Bootstrap.SSHKey)
+	}
+	written, err := os.ReadFile(cfgFile)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if strings.Contains(string(written), "PRIVATE KEY") {
+		t.Error("private key material must never be written to the config file")
+	}
 	info, err := os.Stat(cfgFile)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Errorf("config file mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+// A pasted public key has no private half on this machine, so the config must
+// not claim a generated keypair: provisioning uses defaults.ci_ssh_key and
+// globals.ssh_key keeps pointing at whatever the operator uses for SSH.
+func TestSaveProxmoxSetupPastedKeyKeepsGlobalsUnset(t *testing.T) {
+	cfgFile := filepath.Join(t.TempDir(), "config.toml")
+	cleanup := setEnv(t,
+		"ARGUS_CONFIG", cfgFile,
+		"PROXMOX_HOST", "", "PROXMOX_TOKEN_ID", "", "PROXMOX_SECRET", "",
+		"PROXMOX_USERNAME", "", "PROXMOX_PASSWORD", "",
+	)
+	defer cleanup()
+
+	ciSSHKey := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDTrailingOps workstation@laptop"
+
+	if err := SaveProxmoxSetup("https://pve.test:8006", "root@pam", true, ciSSHKey, ""); err != nil {
+		t.Fatalf("SaveProxmoxSetup: %v", err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Defaults.CISSHKey != ciSSHKey {
+		t.Errorf("Defaults.CISSHKey = %q, want %q", cfg.Defaults.CISSHKey, ciSSHKey)
+	}
+	if cfg.Globals.SSHKey != "" {
+		t.Errorf("Globals.SSHKey = %q, want empty for a pasted key", cfg.Globals.SSHKey)
 	}
 }
 
@@ -476,6 +525,7 @@ func TestSaveConfigRoundTrip(t *testing.T) {
 			Bridge:     "vmbr1",
 			OSType:     "l26",
 			CIUser:     "ci-user",
+			CISSHKey:   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP2Y1nZ0Zq0m1cVC1kEQ3sQxW7pYbGhKd6TJXK9ZcQ1a argus@lab",
 			CIIPConfig: "ip=dhcp",
 			Nameserver: "8.8.8.8",
 		},
@@ -595,6 +645,14 @@ func TestSaveConfigRoundTrip(t *testing.T) {
 	}
 	if loaded.Defaults.CIUser != orig.Defaults.CIUser {
 		t.Errorf("Defaults.CIUser: got %q want %q", loaded.Defaults.CIUser, orig.Defaults.CIUser)
+	}
+	if loaded.Defaults.CISSHKey != orig.Defaults.CISSHKey {
+		t.Errorf("Defaults.CISSHKey: got %q want %q", loaded.Defaults.CISSHKey, orig.Defaults.CISSHKey)
+	}
+	if raw, err := os.ReadFile(cfgFile); err != nil {
+		t.Errorf("read config: %v", err)
+	} else if strings.Contains(string(raw), "PRIVATE KEY") {
+		t.Error("config file must never contain private key material")
 	}
 
 	// Salt

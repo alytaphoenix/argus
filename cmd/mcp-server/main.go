@@ -17,6 +17,7 @@ import (
 	"github.com/alytaphoenix/argus/api"
 	"github.com/alytaphoenix/argus/config"
 	gkr "github.com/alytaphoenix/argus/keyring"
+	"github.com/alytaphoenix/argus/sshkey"
 )
 
 // ── JSON-RPC 2.0 wire types ──────────────────────────────────────────────────
@@ -131,7 +132,10 @@ func intArg(args map[string]any, key string) int {
 // ── Client bundle ────────────────────────────────────────────────────────────
 
 type mcpClients struct {
-	proxmox  *api.Client
+	proxmox *api.Client
+	// defaults carries [defaults] so cloning can fall back to the configured
+	// ci_ssh_key when a caller omits it.
+	defaults config.DefaultsConfig
 	salt     *api.SaltClient
 	nomad    *api.NomadClient
 	hass     *api.HAClient
@@ -201,7 +205,7 @@ func allTools(c *mcpClients) []toolDef {
 		},
 		{
 			Name:        "proxmox_clone_vm",
-			Description: "Clone a VM from a template and optionally configure cloud-init.",
+			Description: "Clone a VM from a template and configure cloud-init. An SSH public key is mandatory: pass ci_ssh_keys or configure [defaults].ci_ssh_key.",
 			InputSchema: inputSchema{
 				Type: "object",
 				Properties: map[string]schemaProp{
@@ -212,7 +216,7 @@ func allTools(c *mcpClients) []toolDef {
 					"storage":      {Type: "string", Description: "Storage pool (blank = same as source)"},
 					"ci_user":      {Type: "string", Description: "Cloud-init user"},
 					"ci_password":  {Type: "string", Description: "Cloud-init password"},
-					"ci_ssh_keys":  {Type: "string", Description: "SSH authorized_keys content"},
+					"ci_ssh_keys":  {Type: "string", Description: "SSH authorized_keys content; blank falls back to [defaults].ci_ssh_key, and one of the two is required"},
 					"ci_ip_config": {Type: "string", Description: "IP config (e.g. ip=dhcp)"},
 				},
 				Required: []string{"node", "template_id", "name"},
@@ -686,6 +690,21 @@ func callTool(name string, args map[string]any, c *mcpClients) (toolResult, erro
 		node := str(args, "node")
 		templateID := intArg(args, "template_id")
 		name := str(args, "name")
+		// Resolve the SSH key before anything is created: a VM cloned without
+		// a key has no way in, so an incomplete request must fail instead of
+		// leaving an unreachable VM behind. An explicit argument wins over the
+		// configured default; either source is accepted once normalised.
+		rawSSH := strings.TrimSpace(str(args, "ci_ssh_keys"))
+		if rawSSH == "" {
+			rawSSH = strings.TrimSpace(c.defaults.CISSHKey)
+		}
+		if rawSSH == "" {
+			return text(""), fmt.Errorf("SSH public key is required; configure defaults.ci_ssh_key or pass ci_ssh_keys")
+		}
+		ciSSH, err := sshkey.NormalizePublicKeys(rawSSH)
+		if err != nil {
+			return text(""), fmt.Errorf("invalid SSH public key: %v", err)
+		}
 		newVMID := intArg(args, "new_vmid")
 		if newVMID == 0 {
 			id, err := c.proxmox.NextVMID(ctx)
@@ -705,23 +724,21 @@ func callTool(name string, args map[string]any, c *mcpClients) (toolResult, erro
 		}
 		ciUser := str(args, "ci_user")
 		ciPass := str(args, "ci_password")
-		ciSSH := str(args, "ci_ssh_keys")
 		ciIP := str(args, "ci_ip_config")
-		if ciUser != "" || ciPass != "" || ciSSH != "" || ciIP != "" {
-			// The VM stays locked until the clone task finishes; config
-			// changes are rejected while the lock is held.
-			waitCtx, waitCancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			defer waitCancel()
-			if exit, err := c.proxmox.WaitForTask(waitCtx, node, taskID); err != nil {
-				return text(fmt.Sprintf("VM %d cloned (task %s) but waiting for clone failed: %v", newVMID, taskID, err)), nil
-			} else if exit != "OK" {
-				return text(fmt.Sprintf("VM %d clone task ended with status %q; cloud-init not applied", newVMID, exit)), nil
-			}
-			if err := c.proxmox.SetCloudInit(waitCtx, node, newVMID, api.CloudInitOptions{
-				User: ciUser, Password: ciPass, SSHKeys: ciSSH, IPConfig: ciIP,
-			}); err != nil {
-				return text(fmt.Sprintf("VM %d cloned (task %s) but cloud-init failed: %v", newVMID, taskID, err)), nil
-			}
+		// The VM stays locked until the clone task finishes; config changes
+		// are rejected while the lock is held. A key is always present after
+		// validation above, so cloud-init always runs.
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer waitCancel()
+		if exit, err := c.proxmox.WaitForTask(waitCtx, node, taskID); err != nil {
+			return text(fmt.Sprintf("VM %d cloned (task %s) but waiting for clone failed: %v", newVMID, taskID, err)), nil
+		} else if exit != "OK" {
+			return text(fmt.Sprintf("VM %d clone task ended with status %q; cloud-init not applied", newVMID, exit)), nil
+		}
+		if err := c.proxmox.SetCloudInit(waitCtx, node, newVMID, api.CloudInitOptions{
+			User: ciUser, Password: ciPass, SSHKeys: ciSSH, IPConfig: ciIP,
+		}); err != nil {
+			return text(fmt.Sprintf("VM %d cloned (task %s) but cloud-init failed: %v", newVMID, taskID, err)), nil
 		}
 		return text(fmt.Sprintf("VM %d cloned. Task: %s", newVMID, taskID)), nil
 
@@ -1392,6 +1409,7 @@ func main() {
 	c := &mcpClients{}
 
 	c.proxmox = api.NewClient(cfg)
+	c.defaults = cfg.Defaults
 
 	if cfg.Salt.URL != "" {
 		if sc, err := api.NewSaltClient(cfg.Salt); err == nil {

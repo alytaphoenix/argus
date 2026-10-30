@@ -1,9 +1,18 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/alytaphoenix/argus/api"
+	"github.com/alytaphoenix/argus/config"
+	"github.com/alytaphoenix/argus/sshkey"
 )
 
 // ── Helper function tests ─────────────────────────────────────────────────────
@@ -147,5 +156,147 @@ func TestAllTools_Names_Unique(t *testing.T) {
 		if tool.InputSchema.Type == "" {
 			t.Errorf("tool %q has empty InputSchema.Type", tool.Name)
 		}
+	}
+}
+
+// ── proxmox_clone_vm SSH key resolution ─────────────────────────────────────
+
+// fakeProxmox answers the clone/cloud-init endpoints and records the key each
+// cloud-init call carried.
+type fakeProxmox struct {
+	t        *testing.T
+	requests int
+	nextID   int
+	clones   []int
+	sshKeys  map[int]string
+}
+
+func (f *fakeProxmox) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.requests++
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api2/json/cluster/nextid":
+		f.nextID++
+		fmt.Fprintf(w, `{"data":%d}`, f.nextID)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/clone"):
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			f.t.Errorf("clone body: %v", err)
+		}
+		id, _ := body["newid"].(float64)
+		f.clones = append(f.clones, int(id))
+		fmt.Fprintf(w, `{"data":"UPID:pve1:0000:0000:0000:clone:qemu:%d:root@pam:"}`, int(id))
+	case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/tasks/"):
+		w.Write([]byte(`{"data":{"status":"stopped","exitstatus":"OK"}}`))
+	case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/config"):
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			f.t.Errorf("cloud-init body: %v", err)
+		}
+		encoded, ok := body["sshkeys"]
+		if !ok {
+			f.t.Errorf("cloud-init carried no sshkeys: %+v", body)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		decoded, err := url.QueryUnescape(encoded)
+		if err != nil {
+			f.t.Errorf("unescape sshkeys: %v", err)
+		}
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		vmid, err := strconv.Atoi(parts[len(parts)-2])
+		if err != nil {
+			f.t.Errorf("vmid in %q: %v", r.URL.Path, err)
+		}
+		f.sshKeys[vmid] = decoded
+		w.Write([]byte(`{"data":null}`))
+	default:
+		f.t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func cloneFixture(t *testing.T, defaults config.DefaultsConfig) (*mcpClients, *fakeProxmox) {
+	t.Helper()
+	fake := &fakeProxmox{t: t, sshKeys: map[int]string{}}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	return &mcpClients{
+		proxmox:  api.NewClient(&config.Config{Host: srv.URL, TokenID: "user@pam!tok", Secret: "sec"}),
+		defaults: defaults,
+	}, fake
+}
+
+func cloneArgs(extra map[string]any) map[string]any {
+	args := map[string]any{"node": "pve1", "template_id": float64(9000), "name": "web"}
+	for k, v := range extra {
+		args[k] = v
+	}
+	return args
+}
+
+func mcpKeyFixture(t *testing.T) string {
+	t.Helper()
+	publicKey, err := sshkey.Generate(t.TempDir()+"/key", false)
+	if err != nil {
+		t.Fatalf("fixture key: %v", err)
+	}
+	return publicKey
+}
+
+func TestCloneVMUsesConfiguredDefaultKey(t *testing.T) {
+	defaultKey := mcpKeyFixture(t)
+	c, fake := cloneFixture(t, config.DefaultsConfig{CISSHKey: defaultKey})
+
+	if _, err := callTool("proxmox_clone_vm", cloneArgs(nil), c); err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+	if len(fake.clones) != 1 {
+		t.Fatalf("cloned %v, want one VM", fake.clones)
+	}
+	if got := fake.sshKeys[1]; got != defaultKey {
+		t.Errorf("sshkeys = %q, want the configured default %q", got, defaultKey)
+	}
+}
+
+func TestCloneVMExplicitKeyWinsOverDefault(t *testing.T) {
+	defaultKey := mcpKeyFixture(t)
+	explicit := mcpKeyFixture(t)
+	c, fake := cloneFixture(t, config.DefaultsConfig{CISSHKey: defaultKey})
+
+	if _, err := callTool("proxmox_clone_vm", cloneArgs(map[string]any{"ci_ssh_keys": "  " + explicit + " "}), c); err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+	if got := fake.sshKeys[1]; got != explicit {
+		t.Errorf("sshkeys = %q, want the explicit %q", got, explicit)
+	}
+}
+
+func TestCloneVMRejectsMissingKeyBeforeAnyRequest(t *testing.T) {
+	c, fake := cloneFixture(t, config.DefaultsConfig{})
+
+	_, err := callTool("proxmox_clone_vm", cloneArgs(map[string]any{"ci_ssh_keys": "   "}), c)
+	if err == nil {
+		t.Fatal("cloning without a key must fail")
+	}
+	if err.Error() != "SSH public key is required; configure defaults.ci_ssh_key or pass ci_ssh_keys" {
+		t.Errorf("err = %q, want the missing-key message", err)
+	}
+	if fake.requests != 0 {
+		t.Errorf("made %d Proxmox requests, want 0", fake.requests)
+	}
+}
+
+func TestCloneVMRejectsMalformedKeyBeforeAnyRequest(t *testing.T) {
+	c, fake := cloneFixture(t, config.DefaultsConfig{CISSHKey: "garbage"})
+
+	_, err := callTool("proxmox_clone_vm", cloneArgs(nil), c)
+	if err == nil {
+		t.Fatal("cloning with a malformed key must fail")
+	}
+	if !strings.HasPrefix(err.Error(), "invalid SSH public key: ") {
+		t.Errorf("err = %q, want an invalid-key message", err)
+	}
+	if fake.requests != 0 {
+		t.Errorf("made %d Proxmox requests, want 0", fake.requests)
 	}
 }
