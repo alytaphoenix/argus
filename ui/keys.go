@@ -17,6 +17,7 @@ type keyMap struct {
 	OpenNomad   key.Binding
 	SSH         key.Binding
 	Clone       key.Binding
+	Destroy     key.Binding
 	Credentials key.Binding
 	Select      key.Binding
 	Help        key.Binding
@@ -79,6 +80,10 @@ var keys = keyMap{
 		key.WithKeys("c"),
 		key.WithHelp("c", "clone/provision"),
 	),
+	Destroy: key.NewBinding(
+		key.WithKeys("d"),
+		key.WithHelp("d", "destroy VM"),
+	),
 	Credentials: key.NewBinding(
 		key.WithKeys("?"),
 		key.WithHelp("?", "keys"),
@@ -105,7 +110,7 @@ func nodeHelpStr(hasSalt, hasNomad bool) string {
 }
 
 func guestHelpStr() string {
-	return styleHelp.Render("↑/k up  ↓/j down  space select  enter detail  s start  S stop  r reboot  t ssh  c provision  z right-size  R refresh  b back  q quit")
+	return styleHelp.Render("↑/k up  ↓/j down  space select  enter detail  s start  S stop  r reboot  d destroy  t ssh  c provision  z right-size  R refresh  b back  q quit")
 }
 
 func detailHelpStr() string {

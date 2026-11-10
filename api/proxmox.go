@@ -255,6 +255,18 @@ func (c *Client) NodeReboot(ctx context.Context, node string) error {
 	return c.putForm(ctx, path, v)
 }
 
+// DeleteGuest destroys a stopped QEMU VM or LXC container and returns the
+// task UPID. purge also removes the guest from backup jobs, replication, HA,
+// and firewall configuration. Disks referenced only by the guest are removed;
+// shared disks are not.
+func (c *Client) DeleteGuest(ctx context.Context, node, guestType string, vmid int, purge bool) (string, error) {
+	path := fmt.Sprintf("/nodes/%s/%s/%d", node, guestType, vmid)
+	if purge {
+		path += "?purge=1"
+	}
+	return c.deleteGetStr(ctx, path)
+}
+
 // Snapshot is a VM/LXC snapshot entry.
 type Snapshot struct {
 	Name        string  `json:"name"`

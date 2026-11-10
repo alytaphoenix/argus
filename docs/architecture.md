@@ -21,7 +21,8 @@ cmd/metrics-server   Standalone Prometheus exporter
 cmd/mcp-server       MCP stdio server
 api/                 HTTP/Salt/Proxmox/... clients, one file per integration
 bootstrap/           Salt installer, platform planner, formula materialization
-formula/             Opinionated Salt formula registry and dependency resolver
+formula/             Opinionated Salt formula registry, dependency resolver, stack conversion
+stack/               TOML service-stack schema, validation, Compose/SLS renderers
 config/              TOML + environment loading, validation, config editor I/O
 db/                  SQLite schema, migrations, and query helpers
 keyring/             OS keychain wrapper (macOS Keychain, Secret Service, Windows)
@@ -87,6 +88,12 @@ the guided setup path for those services.
 - **Bootstrap** plans from live Proxmox/Salt/SSH state, installs Salt in an
   isolated venv, materializes the formula registry under `/srv/salt/argus`,
   applies states through salt-api, and records each run.
+- **Stacks** load from `~/.config/argus/stacks/*.toml`, render to a Compose
+  file plus `argus.<name>` SLS, and join the formula registry. Apply sends each
+  stack state to its declared `target` minion instead of the Salt master.
+- **Guest destroy** deletes a stopped VM/container through
+  `DELETE /nodes/<node>/<type>/<vmid>`, waits for the Proxmox task, and removes
+  the local provisioning row.
 - **Keychain** stores secrets that should not be written to disk. Config file
   values are fallbacks; keychain values win when present.
 

@@ -14,6 +14,12 @@ type nodesLoadedMsg struct{ nodes []api.Node }
 type guestsLoadedMsg struct{ guests []api.Guest }
 type guestStatusMsg struct{ guest api.Guest }
 type actionDoneMsg struct{ err error }
+
+type guestDestroyedMsg struct {
+	vmid int
+	name string
+	err  error
+}
 type errMsg struct{ err error }
 type vmStatusSyncedMsg struct{} // DB write complete; no UI update needed
 

@@ -17,6 +17,7 @@ import (
 	"github.com/alytaphoenix/argus/db"
 	"github.com/alytaphoenix/argus/formula"
 	gkr "github.com/alytaphoenix/argus/keyring"
+	"github.com/alytaphoenix/argus/stack"
 )
 
 func runBootstrap(args []string) {
@@ -121,6 +122,11 @@ func runBootstrap(args []string) {
 		fmt.Fprintf(os.Stderr, "bootstrap: formula registry: %v\n", err)
 		os.Exit(1)
 	}
+	registry, err = formula.WithStackDir(registry, stack.DefaultDir())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bootstrap: stack registry: %v\n", err)
+		os.Exit(1)
+	}
 	selected := splitCSV(*formulasFlag)
 
 	if cmd == "formulas" {
@@ -208,13 +214,23 @@ func runBootstrap(args []string) {
 				SaltAPIUser: apiUser, SaltVersion: "3008.x", Status: "ready",
 				DetailsJSON: string(planJSON), LastChecked: time.Now(),
 			})
-			for _, state := range run.Applied {
+			applied := run.AppliedTargets
+			if len(applied) == 0 {
+				for _, state := range run.Applied {
+					applied = append(applied, bootstrap.AppliedState{State: state, Target: masterID})
+				}
+			}
+			for _, row := range applied {
 				for _, f := range registry.List() {
-					if f.StateName() != state {
+					if f.StateName() != row.State {
 						continue
 					}
+					target := row.Target
+					if target == "" {
+						target = masterID
+					}
 					_ = database.SaveFormulaInstallation(db.FormulaInstallation{
-						FormulaID: f.ID, Target: masterID, State: state, Version: f.Version,
+						FormulaID: f.ID, Target: target, State: row.State, Version: f.Version,
 						Status: "applied", AppliedAt: time.Now(),
 					})
 				}

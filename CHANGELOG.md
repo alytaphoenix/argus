@@ -8,6 +8,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Stack-driven provisioning: an optional `[provision]` block creates the
+  stack's target VM from a Proxmox cloud image or template, injects cloud-init
+  SSH access, installs and accepts the Salt minion key, then applies the stack.
+  Stacks also gained per-service `command` and `config_owner` fields, so a
+  container can run a non-default command and own its bind-mounted config
+  directory. See [docs/service-stacks.md](docs/service-stacks.md).
+- Declarative service stacks: TOML definitions under
+  `~/.config/argus/stacks/*.toml` describe a target Salt minion, install root,
+  media mount, PUID/PGID, timezone, and `[[service]]` containers. argus renders
+  a deterministic Compose file and Salt SLS, merges the stack into the formula
+  registry, and applies `argus.<stack>` on the declared minion. Includes a
+  built-in `servarr` stack for Prowlarr, Sonarr, Radarr, Lidarr, and Whisparr,
+  plus `argus stack list|show|init|apply`. See
+  [docs/service-stacks.md](docs/service-stacks.md).
+- Guest destroy: `DELETE /nodes/<node>/<type>/<vmid>` in the Proxmox client,
+  `argus vm list|delete` (stopped-only, `--yes`, optional `--name` identity
+  check, purge and task wait), and a TUI `d` action with an explicit
+  confirmation banner. Local provisioning rows are removed on success.
+- Whisparr support in `[servarr.whisparr]`, the config editor, orchestration
+  health checks, and the media service catalog.
+- [docs/review-servarr-orchestration.md](docs/review-servarr-orchestration.md):
+  orchestrator/DCIM and usability review from the phoenix-servarr case.
+
 - VM SSH key bootstrap: every new QEMU VM is now created with a working SSH
   public key. First-run setup gained an optional "SSH key" field; leaving it
   blank generates an Ed25519 keypair at `~/.ssh/argus_ed25519` (directory `0700`,
@@ -59,6 +82,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Prowlarr and Lidarr showed as offline in orchestration and status views. The
+  *arr client hardcoded `/api/v3`, but both apps only serve `/api/v1` (Sonarr,
+  Radarr, and Whisparr serve `/api/v3`), so every call returned 404. The client
+  now selects the API version per app, so system status, health, and queue work
+  for all five.
+- The built-in `servarr` stack pulled `lscr.io/linuxserver/whisparr:latest`,
+  which no longer exists on the registry (`denied` / Docker Hub 404), so
+  `stack apply` failed while pulling Whisparr. Whisparr now uses
+  `ghcr.io/hotio/whisparr:v3`: upstream publishes no official image and the
+  Servarr wiki points at hotio, whose `latest` tag still tracks the 2.2 line.
 - TrueNAS datasets came back as pool roots only. `pool.dataset.query` nests
   children inside their parent row unless the query asks for
   `extra={"flat":true}`, so the Plex screen's media-root picker (which matches

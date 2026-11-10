@@ -212,6 +212,11 @@ url     = "http://192.168.1.50:8787"
 api_key = ""
 insecure = false
 
+[servarr.whisparr]
+url     = "http://192.168.1.50:6969"
+api_key = ""
+insecure = false
+
 [servarr.prowlarr]
 url     = "http://192.168.1.50:9696"
 api_key = ""

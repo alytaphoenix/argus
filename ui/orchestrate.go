@@ -599,7 +599,7 @@ var bootstrapServiceKeywordOrder = []struct {
 	{"certs", []string{"stepca", "certs"}},
 	{"truenas", []string{"truenas"}},
 	{"plex", []string{"plex"}},
-	{"servarr", []string{"sonarr", "radarr", "lidarr", "readarr", "prowlarr", "bazarr", "overseerr", "tautulli", "servarr"}},
+	{"servarr", []string{"sonarr", "radarr", "lidarr", "readarr", "whisparr", "prowlarr", "bazarr", "overseerr", "tautulli", "servarr"}},
 	{"hermes", []string{"hermes"}},
 	{"signal", []string{"signal"}},
 }
@@ -850,6 +850,7 @@ func servarrAppsFromCfg(cfg config.Config) []servarrApp {
 	add("radarr", s.Radarr.URL, s.Radarr.APIKey, s.Radarr.Insecure)
 	add("lidarr", s.Lidarr.URL, s.Lidarr.APIKey, s.Lidarr.Insecure)
 	add("readarr", s.Readarr.URL, s.Readarr.APIKey, s.Readarr.Insecure)
+	add("whisparr", s.Whisparr.URL, s.Whisparr.APIKey, s.Whisparr.Insecure)
 	add("prowlarr", s.Prowlarr.URL, s.Prowlarr.APIKey, s.Prowlarr.Insecure)
 	add("bazarr", s.Bazarr.URL, s.Bazarr.APIKey, s.Bazarr.Insecure)
 	add("overseerr", s.Overseerr.URL, s.Overseerr.APIKey, s.Overseerr.Insecure)

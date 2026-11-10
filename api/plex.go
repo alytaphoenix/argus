@@ -246,7 +246,19 @@ type ServarrHealth struct {
 	Message string `json:"message"`
 }
 
-// ServarrSystemStatus is the /api/v3/system/status response.
+// apiVersion is the REST version segment for the app. Prowlarr, Lidarr, and
+// Readarr expose /api/v1; Sonarr, Radarr, and Whisparr expose /api/v3. Calling
+// v3 on a v1-only app returns 404, which used to read as "offline".
+func (c *ServarrClient) apiVersion() string {
+	switch strings.ToLower(c.appName) {
+	case "prowlarr", "lidarr", "readarr":
+		return "v1"
+	default:
+		return "v3"
+	}
+}
+
+// ServarrSystemStatus is the system/status response.
 type ServarrSystemStatus struct {
 	AppName  string `json:"appName"`
 	Version  string `json:"version"`
@@ -269,7 +281,7 @@ type ServarrQueueItem struct {
 // SystemStatus returns basic app info and version.
 func (c *ServarrClient) SystemStatus(ctx context.Context) (*ServarrSystemStatus, error) {
 	var out ServarrSystemStatus
-	if err := c.get(ctx, "/api/v3/system/status", &out); err != nil {
+	if err := c.get(ctx, "/api/"+c.apiVersion()+"/system/status", &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -278,7 +290,7 @@ func (c *ServarrClient) SystemStatus(ctx context.Context) (*ServarrSystemStatus,
 // Health returns active health check issues.
 func (c *ServarrClient) Health(ctx context.Context) ([]ServarrHealth, error) {
 	var out []ServarrHealth
-	if err := c.get(ctx, "/api/v3/health", &out); err != nil {
+	if err := c.get(ctx, "/api/"+c.apiVersion()+"/health", &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -289,7 +301,7 @@ func (c *ServarrClient) Queue(ctx context.Context) ([]ServarrQueueItem, error) {
 	var resp struct {
 		Records []ServarrQueueItem `json:"records"`
 	}
-	if err := c.get(ctx, "/api/v3/queue?pageSize=50", &resp); err != nil {
+	if err := c.get(ctx, "/api/"+c.apiVersion()+"/queue?pageSize=50", &resp); err != nil {
 		return nil, err
 	}
 	return resp.Records, nil
@@ -344,6 +356,7 @@ var MediaServices = []MediaServiceDef{
 	{ID: "radarr", Name: "Radarr", Description: "Movie management & download automation", DefaultPort: 7878, DockerImage: "linuxserver/radarr", Category: "arr"},
 	{ID: "lidarr", Name: "Lidarr", Description: "Music management & download automation", DefaultPort: 8686, DockerImage: "linuxserver/lidarr", Category: "arr"},
 	{ID: "readarr", Name: "Readarr", Description: "Book/audiobook management", DefaultPort: 8787, DockerImage: "linuxserver/readarr", Category: "arr"},
+	{ID: "whisparr", Name: "Whisparr", Description: "Adult movie management & download automation", DefaultPort: 6969, DockerImage: "ghcr.io/hotio/whisparr", Category: "arr"},
 	{ID: "prowlarr", Name: "Prowlarr", Description: "Indexer manager / proxy for *arr apps", DefaultPort: 9696, DockerImage: "linuxserver/prowlarr", Category: "arr"},
 	{ID: "bazarr", Name: "Bazarr", Description: "Subtitle management for Sonarr & Radarr", DefaultPort: 6767, DockerImage: "linuxserver/bazarr", Category: "utility"},
 	{ID: "overseerr", Name: "Overseerr", Description: "Media request management (Plex-native)", DefaultPort: 5055, DockerImage: "linuxserver/overseerr", Category: "request"},

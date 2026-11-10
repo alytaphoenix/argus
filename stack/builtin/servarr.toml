@@ -1,0 +1,60 @@
+# argus built-in servarr stack.
+#
+# target must be an accepted Salt minion (the VM that will run the stack).
+# Change install_root/media_root to match the paths on that minion, then:
+#   argus stack init servarr     # write an editable copy to ~/.config/argus/stacks
+#   argus stack apply servarr --yes
+name        = "servarr"
+description = "Prowlarr indexers with Sonarr, Radarr, Lidarr, and Whisparr media automation."
+target      = "phoenix-servarr"
+node        = "proxmox"
+install_root = "/opt/argus/servarr"
+media_root   = "/mnt/media"
+puid         = 1000
+pgid         = 1000
+timezone     = "UTC"
+
+[[service]]
+id          = "prowlarr"
+name        = "Prowlarr"
+description = "Indexer manager and proxy for the *arr apps"
+image       = "lscr.io/linuxserver/prowlarr:latest"
+port        = 9696
+config_path = "/opt/argus/servarr/prowlarr/config"
+health_path = "/ping"
+
+[[service]]
+id          = "sonarr"
+name        = "Sonarr"
+description = "TV series management and download automation"
+image       = "lscr.io/linuxserver/sonarr:latest"
+port        = 8989
+config_path = "/opt/argus/servarr/sonarr/config"
+health_path = "/ping"
+
+[[service]]
+id          = "radarr"
+name        = "Radarr"
+description = "Movie management and download automation"
+image       = "lscr.io/linuxserver/radarr:latest"
+port        = 7878
+config_path = "/opt/argus/servarr/radarr/config"
+health_path = "/ping"
+
+[[service]]
+id          = "lidarr"
+name        = "Lidarr"
+description = "Music management and download automation"
+image       = "lscr.io/linuxserver/lidarr:latest"
+port        = 8686
+config_path = "/opt/argus/servarr/lidarr/config"
+health_path = "/ping"
+
+[[service]]
+id          = "whisparr"
+name        = "Whisparr"
+description = "Adult movie management and download automation"
+image       = "ghcr.io/hotio/whisparr:v3"
+port        = 6969
+config_path = "/opt/argus/servarr/whisparr/config"
+health_path = "/ping"

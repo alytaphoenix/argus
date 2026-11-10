@@ -17,6 +17,7 @@ import (
 	"github.com/alytaphoenix/argus/db"
 	"github.com/alytaphoenix/argus/formula"
 	gkr "github.com/alytaphoenix/argus/keyring"
+	"github.com/alytaphoenix/argus/stack"
 )
 
 type bootstrapPlanMsg struct {
@@ -63,6 +64,9 @@ func NewBootstrapModel(client *api.Client, salt *api.SaltClient, database *db.DB
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	registry, _ := formula.BuiltinRegistry()
+	if withUser, err := formula.WithStackDir(registry, stack.DefaultDir()); err == nil {
+		registry = withUser
+	}
 	return BootstrapModel{
 		client: client, salt: salt, database: database, cfg: cfg,
 		sshPassword: sshPassword, registry: registry,
@@ -294,13 +298,23 @@ func (m BootstrapModel) recordApplicaton(msg bootstrapApplyDoneMsg) {
 		SaltAPIUser: m.cfg.Bootstrap.SaltAPIUser, SaltVersion: "3008.x",
 		Status: "ready", DetailsJSON: string(planJSON), LastChecked: time.Now(),
 	})
-	for _, state := range msg.run.Applied {
+	applied := msg.run.AppliedTargets
+	if len(applied) == 0 {
+		for _, state := range msg.run.Applied {
+			applied = append(applied, bootstrap.AppliedState{State: state, Target: masterID})
+		}
+	}
+	for _, row := range applied {
 		for _, f := range m.registry.List() {
-			if f.StateName() != state {
+			if f.StateName() != row.State {
 				continue
 			}
+			target := row.Target
+			if target == "" {
+				target = masterID
+			}
 			_ = m.database.SaveFormulaInstallation(db.FormulaInstallation{
-				FormulaID: f.ID, Target: masterID, State: state, Version: f.Version,
+				FormulaID: f.ID, Target: target, State: row.State, Version: f.Version,
 				Status: "applied", AppliedAt: time.Now(),
 			})
 		}

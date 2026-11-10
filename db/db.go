@@ -955,6 +955,13 @@ WHERE id = (SELECT id FROM provisioned_vms WHERE vmid=? ORDER BY provisioned_at 
 	return err
 }
 
+// DeleteProvisionedVM removes every provisioning record for a destroyed VMID.
+// VMIDs are reused, so stale rows must not outlive the guest.
+func (d *DB) DeleteProvisionedVM(vmid int) error {
+	_, err := d.sql.Exec(`DELETE FROM provisioned_vms WHERE vmid=?`, vmid)
+	return err
+}
+
 // GetSaltProfile returns a single salt profile by name, or nil if not found.
 func (d *DB) GetSaltProfile(name string) (*SaltProfile, error) {
 	var p SaltProfile

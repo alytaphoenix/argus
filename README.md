@@ -30,9 +30,9 @@ integrations except Proxmox are optional.
 
 ## Features
 
-- **Proxmox:** node/guest inventory, start/stop/reboot, snapshots, cloning,
-  cloud-init provisioning, right-sizing recommendations, migration, and
-  maintenance.
+- **Proxmox:** node/guest inventory, start/stop/reboot, destroy stopped
+  guests (TUI or `argus vm delete`), snapshots, cloning, cloud-init
+  provisioning, right-sizing recommendations, migration, and maintenance.
 
 - **SSH access by default:** every new VM gets a cloud-init SSH public key —
   paste one or let argus generate an Ed25519 pair in `~/.ssh`, managed under
@@ -40,6 +40,11 @@ integrations except Proxmox are optional.
   existing VMs are never modified.
 - **Salt orchestration:** minion keys, pending VM applies, cluster pillar,
   guided Bootstrap, and service wiring.
+- **Declarative service stacks:** TOML definitions under
+  `~/.config/argus/stacks` render a Compose file and Salt state, target a named
+  minion, and install to explicit paths. The built-in `servarr` stack covers
+  Prowlarr, Sonarr, Radarr, Lidarr, and Whisparr. See
+  [service stacks](docs/service-stacks.md).
 - **Platform bootstrap and formula registry:** inspects a Proxmox host, installs
   an isolated Salt master/API, and tracks an opinionated set of Salt formulas
   with apply/drift status.

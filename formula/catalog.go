@@ -1,12 +1,30 @@
 package formula
 
+import (
+	"fmt"
+
+	"github.com/alytaphoenix/argus/stack"
+)
+
 // BuiltinRegistry returns argus's opinionated formula catalog.
 //
 // The baseline is deliberately small and safe: packages/chrony/unattended
 // upgrades plus node exporter. Everything that publishes ports, installs a
 // container runtime, or replaces a service is opt-in from the registry.
 func BuiltinRegistry() (*Registry, error) {
-	r, err := NewRegistry(catalog()...)
+	formulas := catalog()
+	defs, err := stack.Builtins()
+	if err != nil {
+		return nil, err
+	}
+	for _, def := range defs {
+		f, err := FromStack(def)
+		if err != nil {
+			return nil, fmt.Errorf("builtin stack %q: %w", def.Name, err)
+		}
+		formulas = append(formulas, f)
+	}
+	r, err := NewRegistry(formulas...)
 	if err != nil {
 		return nil, err
 	}
@@ -161,19 +179,6 @@ func catalog() []Formula {
 			Provides:    []string{"plex"},
 			Health:      &Health{TCP: "32400"},
 			Docs:        "Integration only: configure [plex] url + token in argus.",
-		},
-		{
-			ID:          "servarr",
-			Name:        "Servarr suite",
-			Description: "Existing Sonarr/Radarr/Prowlarr stack.",
-			Category:    "Media",
-			Version:     "external",
-			Kind:        KindIntegration,
-			Priority:    60,
-			Target:      "any",
-			Provides:    []string{"servarr"},
-			Health:      &Health{TCP: "8989"},
-			Docs:        "Integration only: configure [servarr.*] sections in argus.",
 		},
 		{
 			ID:          "hermes",

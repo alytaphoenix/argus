@@ -47,12 +47,19 @@ type Plan struct {
 	Ready       bool            `json:"ready"`
 }
 
+// AppliedState records one Salt state applied to one minion.
+type AppliedState struct {
+	State  string `json:"state"`
+	Target string `json:"target"`
+}
+
 // Run is the result of applying a plan.
 type Run struct {
-	Plan            Plan     `json:"plan"`
-	Applied         []string `json:"applied"`
-	SaltAPIPassword string   `json:"-"` // never serialize
-	Log             []string `json:"log"`
+	Plan            Plan           `json:"plan"`
+	Applied         []string       `json:"applied"`
+	AppliedTargets  []AppliedState `json:"applied_targets,omitempty"`
+	SaltAPIPassword string         `json:"-"` // never serialize
+	Log             []string       `json:"log"`
 }
 
 // Manager owns the bootstrap dependencies.
@@ -158,11 +165,13 @@ func (m *Manager) Plan(ctx context.Context, selected []string) (Plan, error) {
 
 	// Salt API / keys.
 	accepted := 0
+	var acceptedKeys []string
 	if m.Salt != nil {
 		keys, err := m.Salt.ListKeys(ctx)
 		if err != nil {
 			add(Step{ID: "salt-api", Title: "Salt API", Phase: "salt", Status: StatusWarning, Detail: "configured but unreachable: " + err.Error()})
 		} else {
+			acceptedKeys = keys.Accepted
 			accepted = len(keys.Accepted)
 			st := StatusOK
 			if accepted == 0 {
@@ -192,9 +201,24 @@ func (m *Manager) Plan(ctx context.Context, selected []string) (Plan, error) {
 	}
 	for _, f := range resolved {
 		fs := FormulaStatus{Formula: f, Detail: "available"}
-		if f.Kind == formula.KindIntegration {
+		switch {
+		case f.IsStack() && f.TargetMinion == "":
+			fs.Detail = "set target to an accepted Salt minion before applying"
+			add(Step{ID: "stack-" + f.Slug(), Title: "Stack " + f.ID, Phase: "stack",
+				Status: StatusWarning, Detail: "no target minion configured"})
+		case f.IsStack():
+			status := StatusOK
+			detail := "target " + f.TargetMinion
+			if acceptedKeys != nil && !containsFold(acceptedKeys, f.TargetMinion) {
+				status = StatusWarning
+				detail += " (Salt key not accepted yet)"
+			}
+			fs.Detail = "stack installs on minion " + f.TargetMinion
+			add(Step{ID: "stack-" + f.Slug(), Title: "Stack " + f.ID, Phase: "stack",
+				Status: status, Detail: detail})
+		case f.Kind == formula.KindIntegration:
 			fs.Detail = "external service — configure its URL/token in argus"
-		} else if m.Salt != nil {
+		case m.Salt != nil:
 			// We cannot reliably infer state application from the API without a
 			// job history query; report availability and let apply record status.
 			fs.Detail = "ready to apply on " + m.MasterID
@@ -268,17 +292,42 @@ func (m *Manager) Apply(ctx context.Context, selected []string) (Run, error) {
 	m.Salt = client
 	run.SaltAPIPassword = password
 
-	// Apply each state in dependency order and wait for completion.
-	for _, state := range States(resolved) {
-		jid, err := m.Salt.ApplyState(ctx, m.MasterID, state)
-		if err != nil {
-			return run, fmt.Errorf("apply %s: %w", state, err)
+	// Apply each state in dependency order and wait for completion. Stack
+	// formulas carry a specific minion; everything else runs on the master.
+	seen := map[string]bool{}
+	for _, f := range resolved {
+		if !f.Installable() {
+			continue
 		}
-		run.Log = append(run.Log, "apply "+state+" jid="+jid)
+		state := f.StateName()
+		if state == "" {
+			continue
+		}
+		target := m.MasterID
+		if f.IsStack() {
+			if f.TargetMinion == "" {
+				return run, fmt.Errorf("stack %q has no target minion; set target in its stack file", f.ID)
+			}
+			target = f.TargetMinion
+			if keys, keyErr := m.Salt.ListKeys(ctx); keyErr == nil && !containsFold(keys.Accepted, target) {
+				return run, fmt.Errorf("stack %q targets minion %q, which has no accepted Salt key", f.ID, target)
+			}
+		}
+		key := target + "\x00" + state
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		jid, err := m.Salt.ApplyState(ctx, target, state)
+		if err != nil {
+			return run, fmt.Errorf("apply %s on %s: %w", state, target, err)
+		}
+		run.Log = append(run.Log, "apply "+state+" on "+target+" jid="+jid)
 		if err := m.waitJob(ctx, jid); err != nil {
-			return run, fmt.Errorf("apply %s: %w", state, err)
+			return run, fmt.Errorf("apply %s on %s: %w", state, target, err)
 		}
 		run.Applied = append(run.Applied, state)
+		run.AppliedTargets = append(run.AppliedTargets, AppliedState{State: state, Target: target})
 	}
 	return run, nil
 }
@@ -341,6 +390,15 @@ func (m *Manager) waitJob(ctx context.Context, jid string) error {
 		}
 	}
 	return fmt.Errorf("timed out waiting for job %s", jid)
+}
+
+func containsFold(values []string, want string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func saltConfig(apiURL, user, password string) config.SaltConfig {

@@ -34,15 +34,20 @@ type GuestsModel struct {
 	acting      bool
 	confirm     confirmKind
 	bulkConfirm string // "start","stop","reboot" or ""
-	notice      string
-	err         error
-	width       int
-	height      int
-	spinner     spinner.Model
-	sshUser     string
-	sshPassword string
-	sshTarget   api.Guest
-	fetchingIP  bool
+	// destroyConfirm arms a destructive delete; destroyTarget is captured so a
+	// refresh cannot change which guest is being deleted.
+	destroyConfirm bool
+	destroying     bool
+	destroyTarget  api.Guest
+	notice         string
+	err            error
+	width          int
+	height         int
+	spinner        spinner.Model
+	sshUser        string
+	sshPassword    string
+	sshTarget      api.Guest
+	fetchingIP     bool
 }
 
 func NewGuestsModel(client *api.Client, node api.Node, sshUser, sshPassword string, database *db.DB) GuestsModel {
@@ -119,6 +124,34 @@ func (m GuestsModel) doAction(action string) tea.Cmd {
 	}
 }
 
+// destroyCmd deletes a stopped guest and waits for the Proxmox task to finish.
+// The API is the last line of defence: it refuses to delete a running guest.
+func (m GuestsModel) destroyCmd(g api.Guest) tea.Cmd {
+	client := m.client
+	database := m.database
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		upid, err := client.DeleteGuest(ctx, g.Node, g.Type, g.VMID, true)
+		if err != nil {
+			return guestDestroyedMsg{vmid: g.VMID, name: g.Name, err: err}
+		}
+		if upid != "" {
+			status, err := client.WaitForTask(ctx, g.Node, upid)
+			if err != nil {
+				return guestDestroyedMsg{vmid: g.VMID, name: g.Name, err: err}
+			}
+			if status != "OK" {
+				return guestDestroyedMsg{vmid: g.VMID, name: g.Name, err: fmt.Errorf("destroy task: %s", status)}
+			}
+		}
+		if database != nil {
+			_ = database.DeleteProvisionedVM(g.VMID)
+		}
+		return guestDestroyedMsg{vmid: g.VMID, name: g.Name}
+	}
+}
+
 func (m GuestsModel) fetchIP(g api.Guest) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
@@ -154,6 +187,17 @@ func (m GuestsModel) Update(msg tea.Msg) (GuestsModel, tea.Cmd) {
 			m.err = nil
 		}
 		m.confirm = confirmNone
+		return m, m.fetch()
+
+	case guestDestroyedMsg:
+		m.destroying = false
+		if msg.err != nil {
+			m.err = msg.err
+			m.notice = ""
+		} else {
+			m.err = nil
+			m.notice = fmt.Sprintf("destroyed VM %d %q", msg.vmid, msg.name)
+		}
 		return m, m.fetch()
 
 	case guestIPMsg:
@@ -218,6 +262,20 @@ func (m GuestsModel) Update(msg tea.Msg) (GuestsModel, tea.Cmd) {
 			return m, nil
 		}
 
+		if m.destroyConfirm {
+			switch msg.String() {
+			case "y", "Y", "enter":
+				m.destroyConfirm = false
+				m.destroying = true
+				m.err = nil
+				return m, m.destroyCmd(m.destroyTarget)
+			default:
+				m.destroyConfirm = false
+				m.notice = "destroy cancelled"
+			}
+			return m, nil
+		}
+
 		if m.confirm != confirmNone {
 			switch msg.String() {
 			case "y", "Y", "enter":
@@ -267,6 +325,19 @@ func (m GuestsModel) Update(msg tea.Msg) (GuestsModel, tea.Cmd) {
 			if len(m.guests) > 0 && m.guests[m.cursor].Status == "running" {
 				m.confirm = confirmReboot
 			}
+		case key.Matches(msg, keys.Destroy):
+			if len(m.guests) == 0 {
+				return m, nil
+			}
+			g := m.guests[m.cursor]
+			if g.Status != "stopped" {
+				m.err = fmt.Errorf("stop VM %d %q before destroying it", g.VMID, g.Name)
+				return m, nil
+			}
+			m.destroyTarget = g
+			m.destroyConfirm = true
+			m.err = nil
+			m.notice = ""
 		case key.Matches(msg, keys.SSH):
 			if len(m.guests) > 0 && m.guests[m.cursor].Status == "running" {
 				m.fetchingIP = true
@@ -410,6 +481,12 @@ func (m GuestsModel) View() string {
 
 	selCount := len(m.selected)
 	switch {
+	case m.destroyConfirm:
+		sb.WriteString(styleError.Render(fmt.Sprintf(
+			"  DESTROY VM %d %q and all its disks? This cannot be undone. [Y/n]",
+			m.destroyTarget.VMID, m.destroyTarget.Name)) + "\n")
+	case m.destroying:
+		sb.WriteString("  " + m.spinner.View() + " destroying VM...\n")
 	case m.bulkConfirm == "start":
 		sb.WriteString(stylePaused.Render(fmt.Sprintf("  Start %d selected guests? [Y/n]", selCount)) + "\n")
 	case m.bulkConfirm == "stop":

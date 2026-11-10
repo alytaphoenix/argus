@@ -339,6 +339,35 @@ func TestServarrClientSystemStatus(t *testing.T) {
 	}
 }
 
+// Prowlarr and Lidarr only expose /api/v1 while Sonarr/Radarr/Whisparr expose
+// /api/v3. A hardcoded v3 made the orchestrator report v1 apps as offline.
+func TestServarrClientAPIVersionPerApp(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/system/status" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"appName": "Prowlarr", "version": "2.7.0"})
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	status, err := NewServarrClient(srv.URL, "key", "prowlarr", false).SystemStatus(ctx)
+	if err != nil {
+		t.Fatalf("prowlarr SystemStatus error: %v", err)
+	}
+	if status.AppName != "Prowlarr" {
+		t.Errorf("AppName = %q, want Prowlarr", status.AppName)
+	}
+
+	if _, err := NewServarrClient(srv.URL, "key", "sonarr", false).SystemStatus(ctx); err == nil {
+		t.Error("sonarr client reached a v1-only server, want a 404 error")
+	}
+}
+
 func TestServarrClientHealth(t *testing.T) {
 	const apiKey = "myapikey"
 	srv := newServarrTestServer(t, apiKey)
@@ -456,7 +485,7 @@ func TestNewPlexClientTrimSlash(t *testing.T) {
 // ── MediaServices catalog test ────────────────────────────────────────────────
 
 func TestMediaServicesCatalog(t *testing.T) {
-	expected := []string{"sonarr", "radarr", "lidarr", "readarr", "prowlarr", "bazarr", "overseerr", "jellyseerr", "tautulli", "ombi", "recyclarr", "flaresolverr"}
+	expected := []string{"sonarr", "radarr", "lidarr", "readarr", "whisparr", "prowlarr", "bazarr", "overseerr", "jellyseerr", "tautulli", "ombi", "recyclarr", "flaresolverr"}
 	if len(MediaServices) != len(expected) {
 		t.Errorf("len(MediaServices) = %d, want %d", len(MediaServices), len(expected))
 	}

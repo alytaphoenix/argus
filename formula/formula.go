@@ -35,21 +35,22 @@ type Health struct {
 
 // Formula is one entry in the registry.
 type Formula struct {
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Category    string         `json:"category"`
-	Version     string         `json:"version"`
-	Kind        Kind           `json:"kind"`
-	Priority    int            `json:"priority"`
-	DependsOn   []string       `json:"depends_on,omitempty"`
-	States      []string       `json:"states,omitempty"`
-	Target      string         `json:"target,omitempty"` // any, master, minion
-	Provides    []string       `json:"provides,omitempty"`
-	Pillar      map[string]any `json:"pillar,omitempty"`
-	Health      *Health        `json:"health,omitempty"`
-	Docs        string         `json:"docs,omitempty"`
-	Destructive bool           `json:"destructive"`
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description"`
+	Category     string         `json:"category"`
+	Version      string         `json:"version"`
+	Kind         Kind           `json:"kind"`
+	Priority     int            `json:"priority"`
+	DependsOn    []string       `json:"depends_on,omitempty"`
+	States       []string       `json:"states,omitempty"`
+	Target       string         `json:"target,omitempty"`        // any, master, minion
+	TargetMinion string         `json:"target_minion,omitempty"` // specific Salt minion ID
+	Provides     []string       `json:"provides,omitempty"`
+	Pillar       map[string]any `json:"pillar,omitempty"`
+	Health       *Health        `json:"health,omitempty"`
+	Docs         string         `json:"docs,omitempty"`
+	Destructive  bool           `json:"destructive"`
 
 	// Files maps a path relative to the formula directory to its content. It is
 	// only used for built-ins and is intentionally omitted from JSON output.
@@ -123,8 +124,14 @@ func validate(f Formula) error {
 	default:
 		return fmt.Errorf("formula %q has an invalid target %q", f.ID, f.Target)
 	}
+	if strings.ContainsAny(f.TargetMinion, " \t\r\n") {
+		return fmt.Errorf("formula %q has an invalid target minion %q", f.ID, f.TargetMinion)
+	}
 	return nil
 }
+
+// IsStack reports whether the formula was generated from a stack definition.
+func (f Formula) IsStack() bool { return f.Category == "Stack" }
 
 // Get returns a formula by ID.
 func (r *Registry) Get(id string) (Formula, bool) {

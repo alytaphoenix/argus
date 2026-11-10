@@ -52,6 +52,7 @@ type ServarrConfigs struct {
 	Radarr    ServarrAppConfig `toml:"radarr"`
 	Lidarr    ServarrAppConfig `toml:"lidarr"`
 	Readarr   ServarrAppConfig `toml:"readarr"`
+	Whisparr  ServarrAppConfig `toml:"whisparr"`
 	Prowlarr  ServarrAppConfig `toml:"prowlarr"`
 	Bazarr    ServarrAppConfig `toml:"bazarr"`
 	Overseerr ServarrAppConfig `toml:"overseerr"`
