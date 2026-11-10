@@ -808,7 +808,9 @@ func callTool(name string, args map[string]any, c *mcpClients) (toolResult, erro
 		if c.salt == nil {
 			return text("Salt not configured."), nil
 		}
-		jid, err := c.salt.ApplyState(ctx, str(args, "target"), "highstate")
+		// Empty state => state.apply with no args, i.e. the top.sls highstate.
+		// Passing "highstate" here is treated as an SLS name by newer Salt.
+		jid, err := c.salt.ApplyState(ctx, str(args, "target"), "")
 		if err != nil {
 			return text(""), err
 		}
