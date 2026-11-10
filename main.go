@@ -28,6 +28,7 @@ Usage:
   argus              Launch the TUI (first-run setup runs automatically if unconfigured)
   argus config       Launch the interactive config editor
   argus bootstrap    Inspect/apply the Salt platform bootstrap
+  argus truenas      Configure/manage TrueNAS (datasets, services, NFS)
   argus --version    Print the version
   argus --help       Show this help
 
@@ -47,6 +48,9 @@ func main() {
 			runConfigEditor()
 		case "bootstrap":
 			runBootstrap(os.Args[2:])
+			os.Exit(0)
+		case "truenas":
+			runTrueNASCLI(os.Args[2:])
 			os.Exit(0)
 		default:
 			fmt.Fprintf(os.Stderr, "argus: unknown command %q\n\n%s\n", os.Args[1], usage)

@@ -7,6 +7,7 @@ Start with the [project README](../README.md) if you are new to argus.
 | [Bootstrap and formulas](bootstrap.md) | Platform bootstrap, Salt runtime, opinionated formula registry, TUI/CLI. |
 | [Service DNS and TLS](service-wiring.md) | Automatic Technitium records, Traefik routes, and step-ca ACME certificates. |
 | [Configuration](configuration.md) | Auth, secrets, env vars, every config section, MCP registration. |
+| [TrueNAS](truenas.md) | REST vs JSON-RPC/WebSocket transports, `argus truenas` CLI reference. |
 | [Deployment](deployment.md) | Workstation install, Proxmox host bootstrap, systemd, upgrades, uninstall. |
 | [Architecture](architecture.md) | Packages, screens, data flow, clients, MCP, metrics. |
 | [Security and hardening](security.md) | Threat model, keychain/DB handling, token scoping, TLS, metrics, runbooks, terminal output. |

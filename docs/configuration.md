@@ -110,7 +110,7 @@ Only Proxmox is required. Omit any other section to disable that integration.
 | `[nomad]` | Nomad URL and optional ACL token. |
 | `[prometheus]` | Prometheus query URL/token and argus's own metrics listener. |
 | `[loki]` | Loki URL and optional bearer token. |
-| `[truenas]` | TrueNAS REST URL, API key, TLS mode. |
+| `[truenas]` | TrueNAS URL, API key, TLS mode. Drives REST v2.0 on ≤25.10 and the JSON-RPC WebSocket API on 26.0+ automatically — see [TrueNAS](truenas.md). |
 | `[technitium]` | Technitium DNS URL and API token. |
 | `[stepca]` | step-ca URL, optional SHA-256 root fingerprint, and ACME provisioner/directory. |
 | `[traefik]` | Traefik ingress IP used for automatic service DNS and TLS. |

@@ -49,6 +49,9 @@ integrations except Proxmox are optional.
 - **Services:** health checks, service registry, automatic Technitium DNS
   records and Traefik routes, step-ca ACME certificates, TrueNAS
   pools/datasets, Home Assistant.
+- **TrueNAS:** pools, datasets, alerts, and services on REST (≤25.10) or the
+  JSON-RPC/WebSocket API (26.0+), plus `argus truenas` for dataset, service, and
+  NFS share management from the shell.
 - **Observability:** Prometheus queries, local resource history, Loki log
   browsing, and a built-in metrics exporter.
 - **Security:** CrowdSec decisions, Wazuh agents/alerts, TCP port scanning.
@@ -88,6 +91,7 @@ walked through in the same sitting.
 
 ```bash
 argus config       # interactive config editor
+argus truenas      # NAS status, datasets, services, NFS shares
 argus --help
 argus --version
 ```
@@ -98,6 +102,8 @@ argus --version
 - [Bootstrap and formulas](docs/bootstrap.md) — platform bootstrap, Salt runtime,
   opinionated formula registry.
 - [Configuration](docs/configuration.md) — auth, secrets, env vars, sections.
+- [TrueNAS](docs/truenas.md) — the two API generations and the `argus truenas`
+  CLI reference.
 - [Deployment](docs/deployment.md) — workstation, Proxmox host, systemd,
   upgrades.
 - [Architecture](docs/architecture.md) — packages, screens, data flow.

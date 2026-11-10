@@ -24,8 +24,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   there is the node SSH / bootstrap key, and repointing it at a key no host
   authorizes would break SSH behind an action that promises "future VMs only".
 
+- TrueNAS 26.0/27.x are supported. TrueNAS 26 deleted the REST v2.0 API, so
+  `TrueNASClient` now probes `GET /api/v2.0/system/info` once and falls back to
+  the JSON-RPC 2.0 WebSocket API at `/api/current`
+  (`auth.login_with_api_key`), mapping each internal REST-style path onto the
+  matching method (`pool.query`, `pool.dataset.query`, `alert.list`,
+  `service.query`, `sharing.nfs.query|create|delete`,
+  `service.start|stop|restart`). One binary drives a 25.10 and a 27.x box with
+  no configuration change, and `[truenas] insecure` governs the first dial *and*
+  every reconnect.
+- `argus truenas` CLI: `status`, `datasets`, `services`,
+  `start|stop|restart <service>`, `nfs-list`, `nfs-create <path> <network>`,
+  `nfs-delete <id>`, `ds-create <name> [type]`, `ds-delete <name>`. Backed by
+  new client methods — `CreateDataset`, `DeleteDataset`, `StartService`,
+  `StopService`, `RestartService`, `NFSShares`, `CreateNFSShare`,
+  `DeleteNFSShare` — and `TrueNASClient.Host()` for NFS mount devices.
+- [docs/truenas.md](docs/truenas.md): transport matrix, per-subcommand
+  REST/JSON-RPC mapping, and behaviour notes. Verified against
+  `TrueNAS-27.0.0-RC.1`.
+
 ### Changed
 
+- TrueNAS writes over REST send an explicit `Content-Length` instead of relying
+  on chunked framing.
 - Provisioning resolves the cloud-init key the same way on every path — form
   field first, then `[defaults].ci_ssh_key` — and refuses to clone with a clear
   error when neither yields a valid key, instead of creating a VM nobody can log
@@ -37,6 +58,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   confirmation is open, like every other form screen.
 
 ### Fixed
+
+- TrueNAS readiness: `system.info` stopped reporting `system_ready` on 26+, which
+  decoded to `false` and made the Services → TrueNAS badge and the
+  `truenas_status` MCP tool call a healthy NAS "not ready". Readiness now comes
+  from `system.ready`.
+- `salt_apply_highstate` (MCP) passed the literal `"highstate"` to
+  `state.apply`, which newer Salt interprets as an SLS name and rejects.
+  Highstate is `state.apply` with no positional argument, so the tool now passes
+  an empty state.
 
 - Cancelling a VM cloud-init rotate/clear left the action armed, so a later
   `d` + `Y` on a Global or Per-node credential row ran the stale cloud-init
