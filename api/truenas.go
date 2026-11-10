@@ -189,7 +189,7 @@ func (c *TrueNASClient) get(ctx context.Context, path string, out interface{}) e
 			return c.rpc("system.info", []any{}, out)
 		case strings.HasPrefix(path, "/pool/dataset"):
 			return c.rpc("pool.dataset.query", []any{
-				[]any{}, map[string]any{"limit": 50, "extra": map[string]any{"flat": false}},
+				[]any{}, map[string]any{"limit": 50, "extra": map[string]any{"flat": true}},
 			}, out)
 		case strings.HasPrefix(path, "/pool"):
 			return c.rpc("pool.query", []any{[]any{}, map[string]any{"limit": 50}}, out)
@@ -430,9 +430,12 @@ func (c *TrueNASClient) Pools(ctx context.Context) ([]TrueNASPool, error) {
 	return pools, nil
 }
 
-// Datasets returns top-level ZFS datasets (one per pool root, limited set).
+// Datasets returns each pool root plus its first-level children — the paths
+// consumers actually export and mount (e.g. PhoenixNest/Media).
 func (c *TrueNASClient) Datasets(ctx context.Context) ([]TrueNASDataset, error) {
-	// Only fetch root-level datasets (no children) to keep response small
+	// flat=true is required: TrueNAS nests children inside their parent row
+	// otherwise, and a roots-only response starves the Plex media-root picker
+	// and the cluster pillar (both build /mnt/<name> per row).
 	var raw []struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -443,7 +446,7 @@ func (c *TrueNASClient) Datasets(ctx context.Context) ([]TrueNASDataset, error) 
 			Parsed int64 `json:"parsed"`
 		} `json:"available"`
 	}
-	if err := c.get(ctx, "/pool/dataset?limit=50&extra={%22flat%22:false}", &raw); err != nil {
+	if err := c.get(ctx, "/pool/dataset?limit=50&extra={%22flat%22:true}", &raw); err != nil {
 		// Fall back to basic endpoint on older versions
 		if err2 := c.get(ctx, "/pool/dataset?limit=50", &raw); err2 != nil {
 			return nil, err
@@ -451,7 +454,8 @@ func (c *TrueNASClient) Datasets(ctx context.Context) ([]TrueNASDataset, error) 
 	}
 	out := make([]TrueNASDataset, 0, len(raw))
 	for _, r := range raw {
-		// Only show root-level datasets (no "/" in name after the pool)
+		// Pool root plus one level below it; deeper entries are content
+		// folders, not export candidates.
 		if strings.Count(r.Name, "/") <= 1 {
 			out = append(out, TrueNASDataset{
 				ID:         r.ID,

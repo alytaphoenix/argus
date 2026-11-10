@@ -59,6 +59,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- TrueNAS datasets came back as pool roots only. `pool.dataset.query` nests
+  children inside their parent row unless the query asks for
+  `extra={"flat":true}`, so the Plex screen's media-root picker (which matches
+  dataset names like `media`/`movies`/`tv` and builds `/mnt/<name>`) found no
+  library path on a pool named `PhoenixNest`, and the orchestrator's TrueNAS
+  ingest wrote the pool root `/mnt/PhoenixNest` into the cluster pillar instead
+  of `/mnt/PhoenixNest/Media`. Both transports request flat rows now; entries
+  deeper than one level stay filtered out as content folders.
 - TrueNAS readiness: `system.info` stopped reporting `system_ready` on 26+, which
   decoded to `false` and made the Services → TrueNAS badge and the
   `truenas_status` MCP tool call a healthy NAS "not ready". Readiness now comes
@@ -67,7 +75,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `state.apply`, which newer Salt interprets as an SLS name and rejects.
   Highstate is `state.apply` with no positional argument, so the tool now passes
   an empty state.
-
 - Cancelling a VM cloud-init rotate/clear left the action armed, so a later
   `d` + `Y` on a Global or Per-node credential row ran the stale cloud-init
   action instead of deleting the selected row. Arming a delete now resets it.

@@ -95,7 +95,18 @@ Behaviour notes:
 
 ## Dataset scope
 
-`Datasets` requests `extra={"flat":false}`, so ZFS returns pool roots with their
-children nested instead of one row per dataset, and argus surfaces the roots.
-That is what the Plex library picker and the orchestrator's pillar dataset sync
-need; drill into children on the NAS itself or with `zfs list`.
+`Datasets` asks for **flat** rows (`extra={"flat":true}`). Asked plainly,
+`pool.dataset.query` nests every child inside its parent row, so argus would see
+one entry per pool and nothing else — which silently starves both consumers:
+
+- the Plex screen picks media roots by matching dataset names (`media`,
+  `movies`, `tv`, `music`, `photos`, `plex`) and builds `/mnt/<name>`;
+- the orchestrator's TrueNAS ingest writes one `storage` pillar entry per
+  dataset with `nfs_export`/`mount_path` = `/mnt/<name>`.
+
+On a pool named `PhoenixNest` the picker finds no library path at all and the
+pillar exports `/mnt/PhoenixNest` instead of `/mnt/PhoenixNest/Media`. `name` is
+the full ZFS path, so `/mnt/` + name is the real mountpoint.
+
+Entries deeper than one level (`PhoenixNest/Media/Movies`) are dropped — content
+folders, not export candidates.
