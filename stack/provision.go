@@ -46,6 +46,9 @@ var (
 	provisionIPConfig = regexp.MustCompile(`^[A-Za-z0-9=.,:/-]+$`)
 	// provisionNameserver matches one IPv4/IPv6 address or DNS name.
 	provisionNameserver = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.:-]*$`)
+	// provisionCPUType matches a Proxmox CPU model such as host or
+	// x86-64-v3, optionally followed by +flag/-flag entries.
+	provisionCPUType = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9,._+-]*$`)
 )
 
 // Validate checks a [provision] block before argus ever builds a qm command.
@@ -91,6 +94,9 @@ func (p Provision) Validate(target string) error {
 	}
 	if p.Cores < 0 || p.MemoryMB < 0 || p.DiskGB < 0 {
 		return fmt.Errorf("cores, memory_mb, and disk_gb must be non-negative")
+	}
+	if p.CPUType != "" && !provisionCPUType.MatchString(p.CPUType) {
+		return fmt.Errorf("cpu_type: %q must be a Proxmox CPU model such as host or x86-64-v3", p.CPUType)
 	}
 
 	if strings.TrimSpace(p.IPConfig) == "" {

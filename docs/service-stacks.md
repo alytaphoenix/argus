@@ -62,6 +62,9 @@ name        = "Sonarr"
 image       = "lscr.io/linuxserver/sonarr:latest"
 port        = 8989                   # host:container, same port
 config_path = "/opt/argus/servarr/sonarr/config"
+config_owner = "ubuntu:ubuntu"       # optional owner for config_path
+user = "1000:1000"                   # optional container user[:group]
+command = ["gateway", "run"]         # optional container command
 health_path = "/ping"
 
 [[service]]
@@ -85,6 +88,9 @@ Rules enforced before rendering:
 - A relative `config_path` is resolved under `install_root`.
 - Service IDs and published ports must be unique.
 - Image names cannot contain whitespace.
+- `command` arguments are non-empty single lines; `config_owner` and `user`
+  are `user[:group]` (numeric IDs or names). A stack sets `config_owner` when
+  the container runs as a non-root UID that must write its bind mount.
 - Unknown TOML keys are errors, so a typo never silently changes behavior.
 
 ## Provisioning the target VM
@@ -102,6 +108,7 @@ cloud_image = "local:iso/noble-server-cloudimg-amd64.img"
 storage = "local-lvm"
 cores = 2
 memory_mb = 4096
+cpu_type = "host"           # or a migration-safe model such as x86-64-v2-AES
 disk_gb = 32
 bridge = "vmbr0"
 ci_user = "ubuntu"          # never "admin": Ubuntu cloud images already have an admin group
@@ -128,6 +135,10 @@ How it works:
 - `cores`, `memory_mb`, `disk_gb`, `bridge`, `ci_user`, `nameserver`, and
   `searchdomain` fall back to `[defaults]` in `config.toml` when omitted.
   `ssh_private_key` falls back to `[globals] ssh_key`.
+- `cpu_type` defaults to `host`. Use `host` when the guest runs a native binary
+  that needs the host's instruction set (for example a GraalVM `signal-cli`
+  build that requires AVX2); use `x86-64-v2-AES` when the VM must migrate
+  between dissimilar CPUs.
 - The target address comes from `ipconfig`; use `ip=dhcp` to wait for the QEMU
   guest agent to report a lease.
 - If the target's Salt key is already accepted the whole step is skipped, and
@@ -137,11 +148,12 @@ How it works:
 
 ## Built-in servarr stack
 
-`stack/builtin/servarr.toml` defines Prowlarr, Sonarr, Radarr, Lidarr, and
-Whisparr with standard ports. The first four use the LinuxServer images;
-Whisparr uses `ghcr.io/hotio/whisparr:v3` because upstream ships no official
-image, `lscr.io/linuxserver/whisparr` no longer exists on the registry, and
-hotio's `latest` tag still tracks the 2.2 release line.
+`stack/builtin/servarr.toml` defines seven services with standard ports:
+Prowlarr, Sonarr, Radarr, Lidarr, Whisparr, a headless qBittorrent download
+client, and Bazarr subtitles. Everything but Whisparr uses the LinuxServer
+images; Whisparr uses `ghcr.io/hotio/whisparr:v3` because upstream ships no
+official image, `lscr.io/linuxserver/whisparr` no longer exists on the registry,
+and hotio's `latest` tag still tracks the 2.2 release line.
 
 | Service | Port | Config |
 | --- | --- | --- |
@@ -150,10 +162,29 @@ hotio's `latest` tag still tracks the 2.2 release line.
 | Radarr | 7878 | `/opt/argus/servarr/radarr/config` |
 | Lidarr | 8686 | `/opt/argus/servarr/lidarr/config` |
 | Whisparr | 6969 | `/opt/argus/servarr/whisparr/config` |
+| qBittorrent | 8080 | `/opt/argus/servarr/qbittorrent/config` |
+| Bazarr | 6767 | `/opt/argus/servarr/bazarr/config` |
 
-All five mount `media_root` at `/data`, which keeps imports and hardlinks on the
+All seven mount `media_root` at `/data`, which keeps imports and hardlinks on the
 same filesystem. Keep downloads and the media library under one mount to avoid
 cross-device moves.
+
+Neither new service is usable straight after `apply`, because both keep their
+upstream defaults:
+
+- qBittorrent prints a temporary `admin` password on every container start, so
+  set a real one in the WebUI (Options → WebUI) before the next restart, and give
+  each *arr app a download client pointing at `qbittorrent:8080` with its own
+  category. Credential-free access from the other containers needs
+  `bypass_auth_subnet_whitelist`, not `auth_subnet_whitelist` — the latter is
+  accepted and ignored.
+- Bazarr's *Use Sonarr* and *Use Radarr* toggles (Settings → Library) are off by
+  default, and it does nothing while they are off. Its own REST API is dormant
+  until a key exists; Bazarr generates one under the top-level `auth:` section of
+  `config/config.yaml`, and it is sent as `X-Api-Key`.
+
+Both are per-app settings held in the bind-mounted config directory, so they
+survive a re-apply.
 
 Customize it rather than applying the built-in target blindly:
 

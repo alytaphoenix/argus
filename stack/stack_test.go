@@ -19,10 +19,10 @@ func TestBuiltinsRenderServarr(t *testing.T) {
 	if servarr == nil {
 		t.Fatal("servarr builtin missing")
 	}
-	if len(servarr.Services) != 5 {
-		t.Fatalf("servarr has %d services, want 5", len(servarr.Services))
+	if len(servarr.Services) != 7 {
+		t.Fatalf("servarr has %d services, want 7", len(servarr.Services))
 	}
-	want := map[string]int{"prowlarr": 9696, "sonarr": 8989, "radarr": 7878, "lidarr": 8686, "whisparr": 6969}
+	want := map[string]int{"prowlarr": 9696, "sonarr": 8989, "radarr": 7878, "lidarr": 8686, "whisparr": 6969, "qbittorrent": 8080, "bazarr": 6767}
 	for _, svc := range servarr.Services {
 		port, ok := want[svc.ID]
 		if !ok {
@@ -33,7 +33,8 @@ func TestBuiltinsRenderServarr(t *testing.T) {
 		}
 	}
 	compose := servarr.Compose()
-	for _, want := range []string{"whisparr:", "ghcr.io/hotio/whisparr:v3", `"/mnt/media:/data"`, `"6969:6969"`} {
+	for _, want := range []string{"whisparr:", "ghcr.io/hotio/whisparr:v3", `"/mnt/media:/data"`, `"6969:6969"`,
+		"lscr.io/linuxserver/bazarr:latest", `"6767:6767"`, `WEBUI_PORT: "8080"`} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("compose missing %q:\n%s", want, compose)
 		}
@@ -42,7 +43,7 @@ func TestBuiltinsRenderServarr(t *testing.T) {
 	for _, want := range []string{
 		"salt://argus/servarr/compose.yaml",
 		`"/opt/argus/servarr/whisparr/config"`,
-		"grep -qx 5",
+		"grep -qx 7",
 		"argus.docker",
 	} {
 		if !strings.Contains(sls, want) {

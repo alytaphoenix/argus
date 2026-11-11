@@ -21,6 +21,10 @@ required; --name refuses to delete a guest whose name does not match.
 `
 
 func runVM(args []string) {
+	if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
+		fmt.Print(vmUsage)
+		return
+	}
 	cmd := "list"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd = args[0]
@@ -31,8 +35,6 @@ func runVM(args []string) {
 		runVMList(args)
 	case "delete", "rm", "destroy":
 		runVMDelete(args)
-	case "help", "-h", "--help":
-		fmt.Print(vmUsage)
 	default:
 		fmt.Fprintf(os.Stderr, "argus vm: unknown command %q\n\n%s", cmd, vmUsage)
 		os.Exit(2)

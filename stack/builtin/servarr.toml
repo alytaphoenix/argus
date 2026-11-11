@@ -5,7 +5,7 @@
 #   argus stack init servarr     # write an editable copy to ~/.config/argus/stacks
 #   argus stack apply servarr --yes
 name        = "servarr"
-description = "Prowlarr indexers with Sonarr, Radarr, Lidarr, and Whisparr media automation."
+description = "Prowlarr indexers with Sonarr, Radarr, Lidarr, and Whisparr media automation, a headless qBittorrent download client, and Bazarr subtitles."
 target      = "phoenix-servarr"
 node        = "proxmox"
 install_root = "/opt/argus/servarr"
@@ -58,3 +58,22 @@ image       = "ghcr.io/hotio/whisparr:v3"
 port        = 6969
 config_path = "/opt/argus/servarr/whisparr/config"
 health_path = "/ping"
+
+[[service]]
+id          = "qbittorrent"
+name        = "qBittorrent"
+description = "Headless download client shared by the *arr apps"
+image       = "lscr.io/linuxserver/qbittorrent:latest"
+port        = 8080
+config_path = "/opt/argus/servarr/qbittorrent/config"
+health_path = "/"
+env         = { WEBUI_PORT = "8080", TORRENTING_PORT = "6881" }
+
+[[service]]
+id          = "bazarr"
+name        = "Bazarr"
+description = "Subtitle agent for Sonarr and Radarr"
+image       = "lscr.io/linuxserver/bazarr:latest"
+port        = 6767
+config_path = "/opt/argus/servarr/bazarr/config"
+health_path = "/health"

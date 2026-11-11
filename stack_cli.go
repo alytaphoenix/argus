@@ -31,6 +31,10 @@ more [[service]] blocks. argus renders a Compose file and Salt state from it.
 `
 
 func runStack(args []string) {
+	if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
+		fmt.Print(stackUsage)
+		return
+	}
 	cmd := "list"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd = args[0]
@@ -45,8 +49,6 @@ func runStack(args []string) {
 		runStackInit(args)
 	case "apply":
 		runStackApply(args)
-	case "help", "-h", "--help":
-		fmt.Print(stackUsage)
 	default:
 		fmt.Fprintf(os.Stderr, "argus stack: unknown command %q\n\n%s", cmd, stackUsage)
 		os.Exit(2)

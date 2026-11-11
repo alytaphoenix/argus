@@ -20,7 +20,23 @@ import (
 	"github.com/alytaphoenix/argus/stack"
 )
 
+const bootstrapUsage = `Usage:
+  argus bootstrap plan     [--formulas IDS] [--dry-run] [--json]
+  argus bootstrap apply    [--formulas IDS] --yes [--json]
+  argus bootstrap status   [--json]
+  argus bootstrap formulas [--json]
+
+Bootstrap prepares the Salt master, the Salt API PAM user, and minion keys on
+the Proxmox host, then installs formulas onto it. The SSH target defaults to
+the Proxmox host ([globals] ssh_host / ssh_key). apply requires --yes.
+`
+
 func runBootstrap(args []string) {
+	if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
+		fmt.Print(bootstrapUsage)
+		return
+	}
+
 	cmd := "plan"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd = args[0]

@@ -13,13 +13,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   SSH access, installs and accepts the Salt minion key, then applies the stack.
   Stacks also gained per-service `command` and `config_owner` fields, so a
   container can run a non-default command and own its bind-mounted config
-  directory. See [docs/service-stacks.md](docs/service-stacks.md).
+  directory, and `[provision] cpu_type` pins the guest CPU model (`host` for
+  guests whose binaries need the host instruction set). See
+  [docs/service-stacks.md](docs/service-stacks.md).
 - Declarative service stacks: TOML definitions under
   `~/.config/argus/stacks/*.toml` describe a target Salt minion, install root,
   media mount, PUID/PGID, timezone, and `[[service]]` containers. argus renders
   a deterministic Compose file and Salt SLS, merges the stack into the formula
   registry, and applies `argus.<stack>` on the declared minion. Includes a
-  built-in `servarr` stack for Prowlarr, Sonarr, Radarr, Lidarr, and Whisparr,
+  built-in `servarr` stack for Prowlarr, Sonarr, Radarr, Lidarr, Whisparr, a
+  headless qBittorrent download client, and Bazarr subtitles,
   plus `argus stack list|show|init|apply`. See
   [docs/service-stacks.md](docs/service-stacks.md).
 - Guest destroy: `DELETE /nodes/<node>/<type>/<vmid>` in the Proxmox client,
@@ -82,6 +85,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `argus stack`, `argus vm`, and `argus bootstrap` ignored their help flags.
+  The subcommand default (`list`, `plan`) only applied to a non-dash first
+  argument, so `argus stack --help` ran `list` and printed that command's flag
+  usage instead. The help check now runs before dispatch, and `argus bootstrap`
+  gained the usage block it never had.
 - Prowlarr and Lidarr showed as offline in orchestration and status views. The
   *arr client hardcoded `/api/v3`, but both apps only serve `/api/v1` (Sonarr,
   Radarr, and Whisparr serve `/api/v3`), so every call returned 404. The client

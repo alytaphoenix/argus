@@ -27,6 +27,7 @@ cloud_image = "local:iso/noble-server-cloudimg-amd64.img"
 storage = "local-lvm"
 cores = 2
 memory_mb = 4096
+cpu_type = "host"
 disk_gb = 32
 bridge = "vmbr0"
 ci_user = "ubuntu"
@@ -52,7 +53,7 @@ func TestDecodeProvisionCloudImage(t *testing.T) {
 	if p.Name != "phoenix-hermes" || p.Node != "proxmox" || p.Storage != "local-lvm" {
 		t.Fatalf("unexpected provision values: %+v", *p)
 	}
-	if p.Template != 0 || p.Cores != 2 || p.MemoryMB != 4096 || p.DiskGB != 32 {
+	if p.Template != 0 || p.Cores != 2 || p.MemoryMB != 4096 || p.DiskGB != 32 || p.CPUType != "host" {
 		t.Fatalf("unexpected sizing: %+v", *p)
 	}
 }
